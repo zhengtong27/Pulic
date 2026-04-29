@@ -6,7 +6,7 @@ from openai import OpenAI
 
 app = Flask(__name__)
 
-# 获取 API Key（优先从环境变量，其次从本地文件/硬编码仅用于开发）
+# 获取 API Key
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
 if not DASHSCOPE_API_KEY:
     print("警告：未设置环境变量 DASHSCOPE_API_KEY，API 调用将失败")
@@ -19,7 +19,7 @@ else:
     client = None
     print("错误：无法创建 OpenAI 客户端，请设置环境变量 DASHSCOPE_API_KEY")
 
-MODEL_NAME = "qwen3-32b-27649d93fc36"   # 请根据您微调后的实际名称修改
+MODEL_NAME = "qwen3-32b-27649d93fc36"   # 请根据实际情况修改
 
 @app.after_request
 def add_headers(response):
@@ -30,7 +30,6 @@ def add_headers(response):
     return response
 
 def call_llm(question):
-    # 非紧急症状过滤
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
@@ -87,7 +86,6 @@ def call_llm(question):
         if reasoning_parts:
             print(f"[思考过程] {''.join(reasoning_parts)}")
         
-        # 去除开头肯定性短语
         prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
         cleaned_answer = prefix_pattern.sub('', full_answer).strip()
         if cleaned_answer:
@@ -132,35 +130,39 @@ def index():
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
     <title>福医卒中通 · 脑卒中智能诊疗助手</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
         :root {
             --font-scale: 1;
         }
-        *{margin:0;padding:0;box-sizing:border-box;font-family:"Microsoft YaHei", sans-serif;}
-        body{
+        body {
             background: linear-gradient(135deg, #f0f7ff 0%, #e6f4fd 100%);
             padding: 20px;
             min-height: 100vh;
             font-size: calc(16px * var(--font-scale));
             padding-bottom: 90px;
         }
-        .container{
+        .container {
             max-width: 1000px;
             margin: 0 auto;
         }
-        header{
+        header {
             text-align: center;
             margin-bottom: 20px;
         }
-        header h1{
+        header h1 {
             font-size: calc(56px * var(--font-scale));
             color: #0077cc;
             margin-bottom: 6px;
         }
-        header p{
+        header p {
             color: #666;
             font-size: calc(28px * var(--font-scale));
         }
-        .main-card{
+        .main-card {
             background: #fff;
             border-radius: 16px;
             box-shadow: 0 8px 24px rgba(0,100,200,0.08);
@@ -169,7 +171,7 @@ def index():
             flex-direction: column;
             height: calc(100vh - 40px - 90px);
         }
-        .chat-header-bar{
+        .chat-header-bar {
             background: linear-gradient(90deg, #0077cc, #0099ee);
             color: #fff;
             padding: 14px 20px;
@@ -178,16 +180,16 @@ def index():
             align-items: center;
             position: relative;
         }
-        .chat-header-bar h2{
+        .chat-header-bar h2 {
             font-size: calc(32px * var(--font-scale));
             font-weight: 500;
         }
-        .header-btns{
+        .header-btns {
             display: flex;
             gap: 8px;
             align-items: center;
         }
-        .header-btn{
+        .header-btn {
             padding: 6px 12px;
             border-radius: 20px;
             background: rgba(255,255,255,0.2);
@@ -199,7 +201,7 @@ def index():
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
-        .font-modal{
+        .font-modal {
             position: absolute;
             top: 60px;
             right: 0;
@@ -211,22 +213,22 @@ def index():
             display: none;
             min-width: 280px;
         }
-        .font-modal.show{
+        .font-modal.show {
             display: block;
         }
-        .font-modal .modal-title{
+        .font-modal .modal-title {
             color: #0077cc;
             font-size: calc(24px * var(--font-scale));
             margin-bottom: 10px;
             font-weight: 500;
         }
-        .font-modal .opt-group{
+        .font-modal .opt-group {
             display: flex;
             gap: 10px;
             margin-bottom: 10px;
             align-items: center;
         }
-        .font-modal .opt-btn{
+        .font-modal .opt-btn {
             flex: 1;
             padding: 8px 0;
             border: 1px solid #eee;
@@ -236,18 +238,18 @@ def index():
             font-size: calc(22px * var(--font-scale));
             cursor: pointer;
         }
-        .font-modal .opt-btn.active{
+        .font-modal .opt-btn.active {
             background: #0077cc;
             color: #fff;
             border-color: #0077cc;
         }
-        .font-modal .input-group{
+        .font-modal .input-group {
             display: flex;
             gap: 8px;
             align-items: center;
             margin-bottom: 10px;
         }
-        .font-modal input{
+        .font-modal input {
             flex: 1;
             padding: 8px 10px;
             border: 1px solid #ddd;
@@ -255,10 +257,7 @@ def index():
             outline: none;
             font-size: calc(22px * var(--font-scale));
         }
-        .font-modal input:focus{
-            border-color: #0077cc;
-        }
-        .font-modal .confirm-btn{
+        .font-modal .confirm-btn {
             width: 100%;
             padding: 8px 0;
             border: none;
@@ -268,25 +267,25 @@ def index():
             font-size: calc(22px * var(--font-scale));
             cursor: pointer;
         }
-        .font-modal .tip-text{
+        .font-modal .tip-text {
             font-size: calc(20px * var(--font-scale));
             color: #666;
             margin-top: 8px;
             text-align: center;
         }
-        .chat-content{
+        .chat-content {
             display: flex;
             flex: 1;
             overflow: hidden;
         }
-        .sidebar{
+        .sidebar {
             width: 200px;
             background: #f8fcff;
             border-right: 1px solid #e6f7ff;
             padding: 20px;
             overflow-y: auto;
         }
-        .avatar-box{
+        .avatar-box {
             width: 100px;
             height: 100px;
             margin: 0 auto 10px;
@@ -298,25 +297,25 @@ def index():
             justify-content: center;
             animation: breathing 4s infinite ease-in-out;
         }
-        .avatar-box.patient{
+        .avatar-box.patient {
             border-color: #5499c7;
         }
-        .avatar-card{
+        .avatar-card {
             text-align: center;
             margin-bottom: 24px;
         }
-        .avatar-card h3{
+        .avatar-card h3 {
             font-size: calc(28px * var(--font-scale));
             color: #0077cc;
         }
-        .patient-text{
+        .patient-text {
             color: #5499c7 !important;
         }
-        @keyframes breathing{
+        @keyframes breathing {
             0%,100%{transform: scale(1);}
             50%{transform: scale(1.04);}
         }
-        .chat-main{
+        .chat-main {
             flex: 1;
             display: flex;
             flex-direction: column;
@@ -331,6 +330,7 @@ def index():
             display: flex;
             gap: 10px;
             scrollbar-width: thin;
+            -webkit-overflow-scrolling: touch;
         }
         .quick-questions::-webkit-scrollbar {
             height: 4px;
@@ -344,6 +344,7 @@ def index():
             color: #0077cc;
             cursor: pointer;
             white-space: nowrap;
+            flex-shrink: 0;
             transition: all 0.2s;
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
@@ -353,23 +354,23 @@ def index():
             color: #fff;
             border-color: #0077cc;
         }
-        .chat-body{
+        .chat-body {
             flex: 1;
             padding: 20px;
             overflow-y: auto;
             background: #fafbfc;
         }
-        .message{
+        .message {
             display: flex;
             gap: 10px;
             margin-bottom: 14px;
             max-width: 75%;
         }
-        .message.user{
+        .message.user {
             margin-left: auto;
             flex-direction: row-reverse;
         }
-        .msg-avatar{
+        .msg-avatar {
             width: 36px;
             height: 36px;
             border-radius: 50%;
@@ -380,20 +381,21 @@ def index():
             align-items: center;
             justify-content: center;
         }
-        .msg-bubble{
+        .msg-bubble {
             padding: 10px 14px;
             border-radius: 14px;
             background: #fff;
             border: 1px solid #eee;
             line-height: 1.5;
             font-size: calc(28px * var(--font-scale));
+            word-break: break-word;
         }
-        .message.user .msg-bubble{
+        .message.user .msg-bubble {
             background: #0077cc;
             color: #fff;
             border: none;
         }
-        .chat-footer{
+        .chat-footer {
             position: fixed;
             bottom: 0;
             left: 0;
@@ -408,7 +410,7 @@ def index():
             box-shadow: 0 -2px 10px rgba(0,100,200,0.05);
             padding-bottom: calc(14px + env(safe-area-inset-bottom));
         }
-        .chat-input{
+        .chat-input {
             flex: 1;
             padding: 10px 16px;
             border: 1px solid #ddd;
@@ -417,7 +419,7 @@ def index():
             font-size: calc(28px * var(--font-scale));
             min-width: 0;
         }
-        .send-btn{
+        .send-btn, .clear-btn {
             padding: 10px 18px;
             border-radius: 24px;
             background: #0077cc;
@@ -429,10 +431,10 @@ def index():
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
-        .clear-btn{
+        .clear-btn {
             background: #777;
         }
-        .mic-btn{
+        .mic-btn {
             width: 38px;
             height: 38px;
             border-radius: 50%;
@@ -445,14 +447,16 @@ def index():
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
-        .mic-btn.recording{
+        .mic-btn.recording {
             background: #e53935;
             animation: pulse 1s infinite;
         }
-        @keyframes pulse{
-            0%{transform: scale(1);}50%{transform: scale(1.1);}100%{transform: scale(1);}
+        @keyframes pulse {
+            0%{transform: scale(1);}
+            50%{transform: scale(1.1);}
+            100%{transform: scale(1);}
         }
-        .modal-mask{
+        .modal-mask {
             position: fixed;
             top: 0;
             left: 0;
@@ -461,85 +465,102 @@ def index():
             z-index: 98;
             display: none;
         }
-        .modal-mask.show{
+        .modal-mask.show {
             display: block;
         }
 
-        /* ========== 移动端适配（隐藏侧边栏，全屏聊天） ========== */
+        /* ========== 移动端适配 (宽度小于等于768px) ========== */
         @media (max-width: 768px) {
-        .sidebar {
-            display: none;
+            .sidebar {
+                display: none;
+            }
+            .chat-main {
+                width: 100%;
+            }
+            .container {
+                padding: 0 8px;
+            }
+            body {
+                padding: 10px 0 90px 0;
+            }
+            .main-card {
+                height: calc(100vh - 20px - 80px);
+                border-radius: 12px;
+            }
+            .message {
+                max-width: 90%;
+            }
+            .msg-bubble {
+                font-size: calc(32px * var(--font-scale));
+                padding: 10px 14px;
+            }
+            .quick-questions {
+                padding: 10px 12px;
+                gap: 10px;
+            }
+            .quick-questions button {
+                padding: 12px 18px;
+                font-size: calc(28px * var(--font-scale));
+                flex-shrink: 0;
+            }
+            .chat-footer {
+                padding: 10px 12px;
+                gap: 12px;
+                padding-bottom: calc(12px + env(safe-area-inset-bottom));
+            }
+            .chat-input {
+                font-size: calc(32px * var(--font-scale));
+                padding: 12px 14px;
+            }
+            .send-btn, .clear-btn {
+                font-size: calc(30px * var(--font-scale));
+                padding: 10px 18px;
+            }
+            .mic-btn {
+                width: 48px;
+                height: 48px;
+                font-size: 28px;
+            }
+            .header-btn {
+                padding: 8px 12px;
+                font-size: calc(26px * var(--font-scale));
+            }
+            header h1 {
+                font-size: calc(44px * var(--font-scale));
+                line-height: 1.2;
+            }
+            header p {
+                font-size: calc(24px * var(--font-scale));
+                padding: 0 16px;
+            }
+            .chat-header-bar h2 {
+                font-size: calc(34px * var(--font-scale));
+            }
+            .chat-body {
+                padding: 16px 12px;
+            }
         }
-        .chat-main {
-            width: 100%;
+
+        /* 特别小的手机 (宽度 <= 480px) */
+        @media (max-width: 480px) {
+            .quick-questions button {
+                padding: 10px 16px;
+                font-size: calc(26px * var(--font-scale));
+            }
+            .send-btn, .clear-btn {
+                padding: 8px 14px;
+                font-size: calc(28px * var(--font-scale));
+            }
+            .mic-btn {
+                width: 44px;
+                height: 44px;
+                font-size: 26px;
+            }
+            .chat-input {
+                font-size: calc(30px * var(--font-scale));
+                padding: 10px 12px;
+            }
         }
-        .container {
-            padding: 0 8px;
-        }
-        body {
-        padding: 10px 0 90px 0;
-        }
-        .main-card {
-            height: calc(100vh - 20px - 80px);
-            border-radius: 12px;
-        }
-        .message {
-            max-width: 90%;
-        }
-        .msg-bubble {
-            font-size: calc(32px * var(--font-scale));
-            padding: 10px 14px;
-            word-break: break-word;
-        }
-        .quick-questions {
-            padding: 10px 12px;
-            gap: 10px;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-        }
-        .quick-questions button {
-            padding: 12px 18px;
-            font-size: calc(28px * var(--font-scale));
-            white-space: nowrap;
-            flex-shrink: 0;
-        }
-        .chat-footer {
-            padding: 10px 12px;
-            gap: 12px;
-            padding-bottom: calc(12px + env(safe-area-inset-bottom));
-        }
-        .chat-input {
-            font-size: calc(32px * var(--font-scale));
-            padding: 12px 14px;
-        }
-        .send-btn, .clear-btn {
-            font-size: calc(30px * var(--font-scale));
-            padding: 10px 18px;
-        }
-        .mic-btn {
-            width: 48px;
-            height: 48px;
-            font-size: 28px;
-        }
-        .header-btn {
-            padding: 8px 12px;
-            font-size: calc(26px * var(--font-scale));
-        }
-        header h1 {
-            font-size: calc(44px * var(--font-scale));
-            line-height: 1.2;
-        }
-        header p {
-            font-size: calc(24px * var(--font-scale));
-            padding: 0 16px;
-        }
-        .chat-header-bar h2 {
-            font-size: calc(34px * var(--font-scale));
-        }
-        .chat-body {
-            padding: 16px 12px;
-        }
-    }
     </style>
 </head>
 <body>
