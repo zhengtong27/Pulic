@@ -8,23 +8,18 @@ app = Flask(__name__)
 
 # 获取 API Key（优先从环境变量，其次从本地文件/硬编码仅用于开发）
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
-# 可选：如果环境变量没有，且你希望本地测试方便，可以临时硬编码（注意不要提交到 GitHub）
 if not DASHSCOPE_API_KEY:
-    # 本地开发时，可以从一个不提交的配置文件读取，或者直接写在这里（仅限本地）
-    # 例如：DASHSCOPE_API_KEY = "sk-xxxxxxxx"  # 取消注释仅用于本地测试
     print("警告：未设置环境变量 DASHSCOPE_API_KEY，API 调用将失败")
 
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-# 只有当 API Key 存在时才初始化客户端，否则可以延迟到调用时处理
 if DASHSCOPE_API_KEY:
     client = OpenAI(api_key=DASHSCOPE_API_KEY, base_url=DASHSCOPE_BASE_URL)
 else:
     client = None
     print("错误：无法创建 OpenAI 客户端，请设置环境变量 DASHSCOPE_API_KEY")
 
-# 模型名称（请根据您微调后的实际名称修改）
-MODEL_NAME = "qwen3-32b-27649d93fc36"   # 如果您的模型名不是这个，请替换
+MODEL_NAME = "qwen3-32b-27649d93fc36"   # 请根据您微调后的实际名称修改
 
 @app.after_request
 def add_headers(response):
@@ -35,22 +30,14 @@ def add_headers(response):
     return response
 
 def call_llm(question):
-    """
-    调用阿里云 DashScope 的 Qwen3-32B 模型，启用深度思考（流式模式）
-    并增加非紧急症状的硬性过滤。
-    """
-    # 定义非紧急症状的正则表达式（匹配多种表述）
+    # 非紧急症状过滤
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
     )
-    
-    # 如果问题匹配非紧急症状，直接返回温和建议，不调用模型
     if mild_pattern.search(question):
-        return (
-            "头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
-            "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。"
-        )
+        return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
     
     system_prompt = (
         "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
@@ -100,20 +87,17 @@ def call_llm(question):
         if reasoning_parts:
             print(f"[思考过程] {''.join(reasoning_parts)}")
         
-        # 二次保险：去除开头肯定性短语
+        # 去除开头肯定性短语
         prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
         cleaned_answer = prefix_pattern.sub('', full_answer).strip()
         if cleaned_answer:
             full_answer = cleaned_answer
         
-        # 二次保险：如果模型回答中仍然包含紧急建议，且问题属于非紧急，则替换
         emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
         if full_answer and any(kw in full_answer for kw in emergency_keywords):
             if mild_pattern.search(question):
-                return (
-                    "头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
-                    "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。"
-                )
+                return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                        "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
         
         return full_answer.strip() if full_answer else "抱歉，模型未返回有效回答。"
     
@@ -125,8 +109,6 @@ def call_llm(question):
 def switch_lang():
     if request.method == 'OPTIONS':
         return '', 200
-    data = request.get_json(silent=True) or {}
-    # 此处可记录语言偏好，但模型会自然根据用户问题语言回答，无需额外处理
     return jsonify({"status": "success"})
 
 @app.route('/api/stroke_qa', methods=['POST', 'OPTIONS'])
@@ -137,12 +119,8 @@ def stroke_qa():
     question = data.get("question", "")
     if not question:
         return jsonify({"status": "error", "message": "问题不能为空"})
-    
     answer = call_llm(question)
-    return jsonify({
-        "status": "success",
-        "data": {"answer": answer}
-    })
+    return jsonify({"status": "success", "data": {"answer": answer}})
 
 @app.route('/')
 def index():
@@ -151,7 +129,7 @@ def index():
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
     <title>福医卒中通 · 脑卒中智能诊疗助手</title>
     <style>
         :root {
@@ -218,6 +196,8 @@ def index():
             font-size: calc(26px * var(--font-scale));
             cursor: pointer;
             white-space: nowrap;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
         .font-modal{
             position: absolute;
@@ -342,7 +322,6 @@ def index():
             flex-direction: column;
             overflow: hidden;
         }
-        /* 快速提问栏样式 */
         .quick-questions {
             padding: 12px 16px;
             background: #f5f9fe;
@@ -366,6 +345,8 @@ def index():
             cursor: pointer;
             white-space: nowrap;
             transition: all 0.2s;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
         .quick-questions button:hover {
             background: #0077cc;
@@ -425,6 +406,7 @@ def index():
             background: #fff;
             z-index: 99;
             box-shadow: 0 -2px 10px rgba(0,100,200,0.05);
+            padding-bottom: calc(14px + env(safe-area-inset-bottom));
         }
         .chat-input{
             flex: 1;
@@ -444,6 +426,8 @@ def index():
             cursor: pointer;
             font-size: calc(28px * var(--font-scale));
             white-space: nowrap;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
         .clear-btn{
             background: #777;
@@ -458,6 +442,8 @@ def index():
             border: none;
             cursor: pointer;
             flex-shrink: 0;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
         .mic-btn.recording{
             background: #e53935;
@@ -478,28 +464,67 @@ def index():
         .modal-mask.show{
             display: block;
         }
+
+        /* ========== 移动端适配（隐藏侧边栏，全屏聊天） ========== */
         @media (max-width: 768px) {
-            .sidebar{
-                width: 120px;
-                padding: 10px;
+            .sidebar {
+                display: none;
             }
-            .avatar-box{
-                width: 60px;
-                height: 60px;
+            .chat-main {
+                width: 100%;
             }
-            .header-btn{
-                padding: 4px 8px;
-                font-size: calc(22px * var(--font-scale));
-            }
-            .chat-footer{
-                padding: 10px 15px;
-            }
-            body{
-                padding: 10px;
-                padding-bottom: 80px;
-            }
-            .main-card{
+            .main-card {
                 height: calc(100vh - 20px - 80px);
+                border-radius: 12px;
+                margin: 0;
+            }
+            .container {
+                padding: 0;
+            }
+            body {
+                padding: 10px 0 80px 0;
+            }
+            .message {
+                max-width: 85%;
+            }
+            .msg-bubble {
+                font-size: calc(32px * var(--font-scale));
+                padding: 10px 12px;
+            }
+            .quick-questions {
+                padding: 10px 12px;
+                gap: 8px;
+            }
+            .quick-questions button {
+                padding: 10px 14px;
+                font-size: calc(26px * var(--font-scale));
+            }
+            .chat-footer {
+                padding: 8px 12px;
+                gap: 8px;
+            }
+            .chat-input {
+                font-size: calc(30px * var(--font-scale));
+                padding: 10px 12px;
+            }
+            .send-btn, .clear-btn {
+                font-size: calc(28px * var(--font-scale));
+                padding: 8px 14px;
+            }
+            .mic-btn {
+                width: 44px;
+                height: 44px;
+                font-size: 24px;
+            }
+            .header-btn {
+                padding: 6px 10px;
+                font-size: calc(24px * var(--font-scale));
+            }
+            header h1 {
+                font-size: calc(44px * var(--font-scale));
+            }
+            header p {
+                font-size: calc(22px * var(--font-scale));
             }
         }
     </style>
@@ -573,7 +598,6 @@ def index():
                 </div>
             </div>
             <div class="chat-main">
-                <!-- 快速提问栏 -->
                 <div class="quick-questions">
                     <button onclick="quickAsk('高血压怎么预防中风？')">高血压怎么预防中风？</button>
                     <button onclick="quickAsk('中风后吃什么好？')">中风后吃什么好？</button>
@@ -586,7 +610,6 @@ def index():
                     <button onclick="quickAsk('中风后可以运动吗？')">中风后可以运动吗？</button>
                     <button onclick="quickAsk('怎么帮家人做心理疏导？')">怎么帮家人做心理疏导？</button>
                 </div>
-                <!-- 聊天消息区域 -->
                 <div class="chat-body" id="chatBody">
                     <div class="message">
                         <div class="msg-avatar">
@@ -622,7 +645,6 @@ const synth = window.speechSynthesis;
 let recognition = null;
 let isRecording = false;
 
-// 头像 SVG 常量
 const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
     <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
@@ -640,7 +662,6 @@ const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
 </svg>`;
 
-// 确保输入框可以正常输入
 var inputElement = document.getElementById("input");
 if (inputElement) {
     inputElement.removeAttribute("readonly");
@@ -739,25 +760,21 @@ function toggleVoice() {
     voiceEnabled = !voiceEnabled;
     document.getElementById("voiceBtn").innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
     if (!voiceEnabled) {
-        synth.cancel(); // 关闭时立即停止
+        synth.cancel();
     } else {
-        // 开启时，尝试朗读最后一条助手消息
-        const lastAssistantMsg = getLastAssistantMessage();
-        if (lastAssistantMsg) {
-            speak(lastAssistantMsg);
-        }
+        const lastMsg = getLastAssistantMessage();
+        if (lastMsg) speak(lastMsg);
     }
 }
 
-// 获取聊天区域中最后一条助手消息的文本内容
 function getLastAssistantMessage() {
     const messages = document.querySelectorAll('.message.assistant .msg-bubble');
     if (messages.length === 0) return null;
     const lastBubble = messages[messages.length - 1];
-    // 获取文本，可能包含 <br>，需要转换
     let text = lastBubble.innerText || lastBubble.textContent;
     return text.trim();
 }
+
 function speak(text) {
     if (!voiceEnabled) return;
     synth.cancel();
@@ -772,7 +789,6 @@ async function send() {
     addMsg("user", text);
     document.getElementById("input").value = "";
     
-    // 显示加载提示
     const loadingDiv = document.createElement("div");
     loadingDiv.className = "message assistant loading-message";
     loadingDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
@@ -788,7 +804,6 @@ async function send() {
         });
         const data = await res.json();
         const ans = data.data.answer;
-        // 移除加载提示
         loadingDiv.remove();
         addMsg("assistant", ans);
         speak(ans);
@@ -804,7 +819,6 @@ function addMsg(role, text) {
     const div = document.createElement("div");
     div.className = "message " + role;
     let avatar = role === "user" ? patientAvatar : doctorAvatar;
-    // 移除 Markdown 加粗符号 **
     let cleanedText = text.replace(/\\*\\*/g, '');
     div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleanedText.replace(/\\n/g, '<br>')}</div>`;
     body.appendChild(div);
@@ -827,14 +841,12 @@ function clearChat() {
     body.innerHTML = `<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang === "zh" ? "你好！我是脑卒中智能助手~" : "Hello! I'm stroke assistant~"}</div></div>`;
 }
 
-// 快速提问函数
 function quickAsk(question) {
     const input = document.getElementById("input");
     input.value = question;
     send();
 }
 
-// 绑定事件
 document.getElementById("sendBtn").onclick = send;
 document.getElementById("clearBtn").onclick = clearChat;
 document.getElementById("langBtn").onclick = switchLang;
@@ -842,7 +854,6 @@ document.getElementById("micBtn").onclick = toggleRec;
 document.getElementById("voiceBtn").onclick = toggleVoice;
 document.getElementById("fontBtn").onclick = openFontModal;
 
-// 输入框：Enter 发送，其他按键保留默认行为
 document.getElementById("input").onkeydown = function(e) {
     if (e.key === "Enter") {
         e.preventDefault();
@@ -858,4 +869,4 @@ document.getElementById("scaleInput").onkeydown = e => e.key === "Enter" && adju
 ''')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5014, debug=False)  # 将 debug=True 改为 False
+    app.run(host='0.0.0.0', port=5014, debug=False)
