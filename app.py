@@ -125,6 +125,11 @@ def index():
     return render_template_string('''
 <!DOCTYPE html>
 <html lang="zh-CN">
+<script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
+<script>
+  var vConsole = new VConsole();
+  console.log("vConsole 已加载，当前页面宽度: " + window.innerWidth);
+</script>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
