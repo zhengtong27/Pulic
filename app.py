@@ -469,96 +469,98 @@ def index():
             display: block;
         }
 
-        /* ========== 移动端适配 (宽度小于等于768px) ========== */
+        /* ========== 移动端适配 (强制生效) ========== */
         @media (max-width: 768px) {
             .sidebar {
-                display: none;
+                display: none !important;
             }
             .chat-main {
-                width: 100%;
+                width: 100% !important;
             }
             .container {
-                padding: 0 8px;
+                padding: 0 8px !important;
             }
             body {
-                padding: 10px 0 90px 0;
+                padding: 10px 0 90px 0 !important;
             }
             .main-card {
-                height: calc(100vh - 20px - 80px);
-                border-radius: 12px;
+                height: calc(100vh - 20px - 80px) !important;
+                border-radius: 12px !important;
             }
             .message {
-                max-width: 90%;
+                max-width: 90% !important;
             }
             .msg-bubble {
-                font-size: calc(32px * var(--font-scale));
-                padding: 10px 14px;
+                font-size: calc(32px * var(--font-scale)) !important;
+                padding: 10px 14px !important;
             }
             .quick-questions {
-                padding: 10px 12px;
-                gap: 10px;
+                padding: 10px 12px !important;
+                gap: 10px !important;
+                overflow-x: auto !important;
             }
             .quick-questions button {
-                padding: 12px 18px;
-                font-size: calc(28px * var(--font-scale));
-                flex-shrink: 0;
+                padding: 12px 18px !important;
+                font-size: calc(28px * var(--font-scale)) !important;
+                flex-shrink: 0 !important;
             }
             .chat-footer {
-                padding: 10px 12px;
-                gap: 12px;
-                padding-bottom: calc(12px + env(safe-area-inset-bottom));
+                padding: 10px 12px !important;
+                gap: 12px !important;
+                flex-wrap: nowrap !important;
+                padding-bottom: calc(12px + env(safe-area-inset-bottom)) !important;
             }
             .chat-input {
-                font-size: calc(32px * var(--font-scale));
-                padding: 12px 14px;
+                font-size: calc(32px * var(--font-scale)) !important;
+                padding: 12px 14px !important;
             }
             .send-btn, .clear-btn {
-                font-size: calc(30px * var(--font-scale));
-                padding: 10px 18px;
+                font-size: calc(30px * var(--font-scale)) !important;
+                padding: 10px 18px !important;
             }
             .mic-btn {
-                width: 48px;
-                height: 48px;
-                font-size: 28px;
+                width: 48px !important;
+                height: 48px !important;
+                font-size: 28px !important;
             }
             .header-btn {
-                padding: 8px 12px;
-                font-size: calc(26px * var(--font-scale));
+                padding: 8px 12px !important;
+                font-size: calc(26px * var(--font-scale)) !important;
             }
             header h1 {
-                font-size: calc(44px * var(--font-scale));
-                line-height: 1.2;
+                font-size: calc(44px * var(--font-scale)) !important;
+                line-height: 1.2 !important;
             }
             header p {
-                font-size: calc(24px * var(--font-scale));
-                padding: 0 16px;
+                font-size: calc(24px * var(--font-scale)) !important;
+                padding: 0 16px !important;
             }
             .chat-header-bar h2 {
-                font-size: calc(34px * var(--font-scale));
+                font-size: calc(34px * var(--font-scale)) !important;
             }
             .chat-body {
-                padding: 16px 12px;
+                padding: 16px 12px !important;
             }
         }
 
-        /* 特别小的手机 (宽度 <= 480px) */
+        /* 特别小的手机 */
         @media (max-width: 480px) {
             .quick-questions button {
-                padding: 10px 16px;
-                font-size: calc(26px * var(--font-scale));
+                padding: 10px 16px !important;
+                font-size: calc(26px * var(--font-scale)) !important;
             }
             .send-btn, .clear-btn {
-                padding: 8px 14px;
-                font-size: calc(28px * var(--font-scale));
+                padding: 8px 14px !important;
+                font-size: calc(28px * var(--font-scale)) !important;
             }
             .mic-btn {
-                width: 44px;
-                height: 44px;
-                font-size: 26px;
+                width: 44px !important;
+                height: 44px !important;
+                font-size: 26px !important;
             }
             .chat-input {
-                font-size: calc(30px * var(--font-scale));
-                padding: 10px 12px;
+                font-size: calc(30px * var(--font-scale)) !important;
+                padding: 10px 12px !important;
             }
         }
     </style>
