@@ -541,6 +541,20 @@ def index():
             .chat-body {
                 padding: 16px 12px !important;
             }
+            .chat-main::after {
+                content: "Mobile styles loaded";
+                display: block;
+                background: red;
+                color: white;
+                text-align: center;
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                z-index: 999;
+                font-size: 12px;
+                padding: 2px;
+            }
         }
 
         /* 特别小的手机 */
