@@ -125,11 +125,6 @@ def index():
     return render_template_string('''
 <!DOCTYPE html>
 <html lang="zh-CN">
-<script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
-<script>
-  var vConsole = new VConsole();
-  console.log("vConsole 已加载，当前页面宽度: " + window.innerWidth);
-</script>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
@@ -473,11 +468,6 @@ def index():
         .modal-mask.show {
             display: block;
         }
-
-        /* 备用媒体查询（仅作后备） */
-        @media (max-width: 768px) {
-            /* 样式将通过 JS 强制注入，此处留空 */
-        }
     </style>
 </head>
 <body>
@@ -798,39 +788,53 @@ function quickAsk(question) {
     send();
 }
 
-// -------------------------------------------------------------------
-// 强制移动端样式注入（解决手机适配问题）
-// -------------------------------------------------------------------
-// 强制移动端布局：完全移除侧边栏，调整聊天区域
+// ========== 完整移动端适配 ==========
 (function() {
     if (window.innerWidth <= 768) {
-        // 等待 DOM 完全加载
-        window.addEventListener('DOMContentLoaded', function() {
+        function applyMobileStyles() {
             var sidebar = document.querySelector('.sidebar');
             var chatMain = document.querySelector('.chat-main');
             var chatContent = document.querySelector('.chat-content');
-
-            if (sidebar) {
-                // 彻底移除侧边栏元素
-                sidebar.remove();
-                console.log('已移除侧边栏');
-            }
+            
+            if (sidebar) sidebar.style.display = 'none';
             if (chatMain) {
-                // 强制聊天区域占满剩余宽度
                 chatMain.style.width = '100%';
                 chatMain.style.flex = '1';
-                chatMain.style.maxWidth = '100%';
-                console.log('已调整聊天区域宽度');
             }
             if (chatContent) {
-                // 确保父容器使用 flex 并只显示聊天区域
                 chatContent.style.display = 'flex';
                 chatContent.style.flexDirection = 'row';
             }
-        });
+            
+            var style = document.createElement('style');
+            style.type = 'text/css';
+            style.innerHTML = `
+                body header { margin-bottom: 8px !important; }
+                body header h1 { font-size: 24px !important; margin-bottom: 2px !important; }
+                body header p { font-size: 12px !important; display: none !important; }
+                body .chat-header-bar { padding: 8px 12px !important; }
+                body .chat-header-bar h2 { font-size: 18px !important; }
+                body .header-btn { font-size: 12px !important; padding: 4px 8px !important; }
+                body .chat-body { padding: 12px !important; }
+                body .msg-bubble { font-size: 14px !important; padding: 8px 12px !important; }
+                body .quick-questions button { font-size: 13px !important; padding: 6px 12px !important; }
+                body .chat-footer { padding: 8px 12px !important; }
+                body .chat-input { font-size: 14px !important; padding: 8px 12px !important; }
+                body .send-btn, body .clear-btn { font-size: 14px !important; padding: 6px 12px !important; }
+                body .mic-btn { width: 32px !important; height: 32px !important; font-size: 16px !important; }
+                body .message { max-width: 90% !important; }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', applyMobileStyles);
+        } else {
+            applyMobileStyles();
+        }
     }
 })();
-// -------------------------------------------------------------------
+// ====================================
 
 document.getElementById("sendBtn").onclick = send;
 document.getElementById("clearBtn").onclick = clearChat;
