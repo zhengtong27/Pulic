@@ -467,66 +467,79 @@ def index():
 
         /* ========== 移动端适配（隐藏侧边栏，全屏聊天） ========== */
         @media (max-width: 768px) {
-            .sidebar {
-                display: none;
-            }
-            .chat-main {
-                width: 100%;
-            }
-            .main-card {
-                height: calc(100vh - 20px - 80px);
-                border-radius: 12px;
-                margin: 0;
-            }
-            .container {
-                padding: 0;
-            }
-            body {
-                padding: 10px 0 80px 0;
-            }
-            .message {
-                max-width: 85%;
-            }
-            .msg-bubble {
-                font-size: calc(32px * var(--font-scale));
-                padding: 10px 12px;
-            }
-            .quick-questions {
-                padding: 10px 12px;
-                gap: 8px;
-            }
-            .quick-questions button {
-                padding: 10px 14px;
-                font-size: calc(26px * var(--font-scale));
-            }
-            .chat-footer {
-                padding: 8px 12px;
-                gap: 8px;
-            }
-            .chat-input {
-                font-size: calc(30px * var(--font-scale));
-                padding: 10px 12px;
-            }
-            .send-btn, .clear-btn {
-                font-size: calc(28px * var(--font-scale));
-                padding: 8px 14px;
-            }
-            .mic-btn {
-                width: 44px;
-                height: 44px;
-                font-size: 24px;
-            }
-            .header-btn {
-                padding: 6px 10px;
-                font-size: calc(24px * var(--font-scale));
-            }
-            header h1 {
-                font-size: calc(44px * var(--font-scale));
-            }
-            header p {
-                font-size: calc(22px * var(--font-scale));
-            }
+        .sidebar {
+            display: none;
         }
+        .chat-main {
+            width: 100%;
+        }
+        .container {
+            padding: 0 8px;
+        }
+        body {
+        padding: 10px 0 90px 0;
+        }
+        .main-card {
+            height: calc(100vh - 20px - 80px);
+            border-radius: 12px;
+        }
+        .message {
+            max-width: 90%;
+        }
+        .msg-bubble {
+            font-size: calc(32px * var(--font-scale));
+            padding: 10px 14px;
+            word-break: break-word;
+        }
+        .quick-questions {
+            padding: 10px 12px;
+            gap: 10px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        .quick-questions button {
+            padding: 12px 18px;
+            font-size: calc(28px * var(--font-scale));
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .chat-footer {
+            padding: 10px 12px;
+            gap: 12px;
+            padding-bottom: calc(12px + env(safe-area-inset-bottom));
+        }
+        .chat-input {
+            font-size: calc(32px * var(--font-scale));
+            padding: 12px 14px;
+        }
+        .send-btn, .clear-btn {
+            font-size: calc(30px * var(--font-scale));
+            padding: 10px 18px;
+        }
+        .mic-btn {
+            width: 48px;
+            height: 48px;
+            font-size: 28px;
+        }
+        .header-btn {
+            padding: 8px 12px;
+            font-size: calc(26px * var(--font-scale));
+        }
+        header h1 {
+            font-size: calc(44px * var(--font-scale));
+            line-height: 1.2;
+        }
+        header p {
+            font-size: calc(24px * var(--font-scale));
+            padding: 0 16px;
+        }
+        .chat-header-bar h2 {
+            font-size: calc(34px * var(--font-scale));
+        }
+        .chat-body {
+            padding: 16px 12px;
+        }
+    }
     </style>
 </head>
 <body>
