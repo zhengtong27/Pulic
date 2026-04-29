@@ -797,30 +797,95 @@ function quickAsk(question) {
 // 强制移动端样式注入（解决手机适配问题）
 // -------------------------------------------------------------------
 (function() {
-    if (window.innerWidth <= 768) {
-        var style = document.createElement('style');
-        style.type = 'text/css';
-        style.innerHTML = `
-            .sidebar { display: none !important; }
-            .chat-main { width: 100% !important; }
-            .container { padding: 0 8px !important; }
-            body { padding: 10px 0 90px 0 !important; }
-            .main-card { height: calc(100vh - 20px - 80px) !important; border-radius: 12px !important; }
-            .message { max-width: 90% !important; }
-            .msg-bubble { font-size: calc(32px * var(--font-scale)) !important; padding: 10px 14px !important; }
-            .quick-questions { padding: 10px 12px !important; gap: 10px !important; overflow-x: auto !important; }
-            .quick-questions button { padding: 12px 18px !important; font-size: calc(28px * var(--font-scale)) !important; flex-shrink: 0 !important; }
-            .chat-footer { padding: 10px 12px !important; gap: 12px !important; flex-wrap: nowrap !important; padding-bottom: calc(12px + env(safe-area-inset-bottom)) !important; }
-            .chat-input { font-size: calc(32px * var(--font-scale)) !important; padding: 12px 14px !important; }
-            .send-btn, .clear-btn { font-size: calc(30px * var(--font-scale)) !important; padding: 10px 18px !important; }
-            .mic-btn { width: 48px !important; height: 48px !important; font-size: 28px !important; }
-            .header-btn { padding: 8px 12px !important; font-size: calc(26px * var(--font-scale)) !important; }
-            header h1 { font-size: calc(44px * var(--font-scale)) !important; line-height: 1.2 !important; }
-            header p { font-size: calc(24px * var(--font-scale)) !important; padding: 0 16px !important; }
-            .chat-header-bar h2 { font-size: calc(34px * var(--font-scale)) !important; }
-            .chat-body { padding: 16px 12px !important; }
-        `;
-        document.head.appendChild(style);
+    // 检查视口宽度
+    const viewportWidth = window.innerWidth;
+    console.log('当前视口宽度:', viewportWidth);
+    
+    if (viewportWidth <= 768) {
+        // 延迟到 DOM 完全加载后执行，确保侧边栏元素已存在
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('正在注入移动端样式...');
+            
+            var style = document.createElement('style');
+            style.type = 'text/css';
+            style.innerHTML = `
+                /* 使用更具体的选择器，并保留 !important */
+                body .sidebar {
+                    display: none !important;
+                }
+                body .chat-main {
+                    width: 100% !important;
+                }
+                body .container {
+                    padding: 0 8px !important;
+                }
+                body {
+                    padding: 10px 0 90px 0 !important;
+                }
+                body .main-card {
+                    height: calc(100vh - 20px - 80px) !important;
+                    border-radius: 12px !important;
+                }
+                body .message {
+                    max-width: 90% !important;
+                }
+                body .msg-bubble {
+                    font-size: calc(32px * var(--font-scale)) !important;
+                    padding: 10px 14px !important;
+                }
+                body .quick-questions {
+                    padding: 10px 12px !important;
+                    gap: 10px !important;
+                    overflow-x: auto !important;
+                }
+                body .quick-questions button {
+                    padding: 12px 18px !important;
+                    font-size: calc(28px * var(--font-scale)) !important;
+                    flex-shrink: 0 !important;
+                }
+                body .chat-footer {
+                    padding: 10px 12px !important;
+                    gap: 12px !important;
+                    flex-wrap: nowrap !important;
+                    padding-bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+                }
+                body .chat-input {
+                    font-size: calc(32px * var(--font-scale)) !important;
+                    padding: 12px 14px !important;
+                }
+                body .send-btn, body .clear-btn {
+                    font-size: calc(30px * var(--font-scale)) !important;
+                    padding: 10px 18px !important;
+                }
+                body .mic-btn {
+                    width: 48px !important;
+                    height: 48px !important;
+                    font-size: 28px !important;
+                }
+                body .header-btn {
+                    padding: 8px 12px !important;
+                    font-size: calc(26px * var(--font-scale)) !important;
+                }
+                body header h1 {
+                    font-size: calc(44px * var(--font-scale)) !important;
+                    line-height: 1.2 !important;
+                }
+                body header p {
+                    font-size: calc(24px * var(--font-scale)) !important;
+                    padding: 0 16px !important;
+                }
+                body .chat-header-bar h2 {
+                    font-size: calc(34px * var(--font-scale)) !important;
+                }
+                body .chat-body {
+                    padding: 16px 12px !important;
+                }
+            `;
+            document.head.appendChild(style);
+            console.log('移动端样式注入完成');
+        });
+    } else {
+        console.log('视口宽度大于 768px，不注入移动端样式');
     }
 })();
 // -------------------------------------------------------------------
