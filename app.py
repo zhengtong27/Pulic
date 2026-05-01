@@ -490,7 +490,7 @@ def index():
                         <button class="opt-btn" id="narrowBtn" onclick="selectOpt('narrow')">缩小</button>
                     </div>
                     <div class="input-group">
-                        <input type="number" id="scaleInput" placeholder="请输入调节倍数" min="1" max="4" step="0.5" value="1">
+                        <input type="number" id="scaleInput" placeholder="请输入倍数" step="0.5" value="">
                     </div>
                     <button class="confirm-btn" onclick="adjustFont()">确认调节</button>
                     <div class="tip-text">放大：1-4（步长0.5）| 缩小：0.3-1（步长0.1）</div>
@@ -618,15 +618,14 @@ function selectOpt(opt) {
         scaleInput.min = 1;
         scaleInput.max = 4;
         scaleInput.step = 0.5;
-        scaleInput.value = 1;
         scaleInput.placeholder = "放大倍数（1-4）";
     } else {
         scaleInput.min = 0.3;
         scaleInput.max = 1;
         scaleInput.step = 0.1;
-        scaleInput.value = 1;
         scaleInput.placeholder = "缩小倍数（0.3-1）";
     }
+    scaleInput.value = "";
     scaleInput.focus();
 }
 
@@ -635,7 +634,9 @@ function adjustFont() {
     let rawValue = scaleInput.value.trim();
     let scale = parseFloat(rawValue);
     
-    if (isNaN(scale) || scale <= 0) scale = 1;
+    if (isNaN(scale) || scale <= 0) {
+        scale = 1;
+    }
     if (fontOpt === 'enlarge') {
         scale = Math.min(4, Math.max(1, scale));
     } else {
@@ -657,7 +658,7 @@ function closeFontModal() {
     document.getElementById('fontModal').classList.remove('show');
     document.getElementById('modalMask').classList.remove('show');
     selectOpt('enlarge');
-    document.getElementById('scaleInput').value = '1';
+    document.getElementById('scaleInput').value = '';
 }
 
 function initRecognition() {
