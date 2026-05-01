@@ -469,10 +469,73 @@ def index():
             display: block;
         }
 
-        /* 移动端时隐藏麦克风按钮 */
+        /* ========== 移动端专用样式 (CSS 媒体查询，可靠生效) ========== */
         @media (max-width: 768px) {
-            .mic-btn {
+            .sidebar {
                 display: none !important;
+            }
+            .chat-main {
+                width: 100% !important;
+            }
+            .container {
+                padding: 0 8px !important;
+            }
+            body {
+                padding: 10px 0 90px 0 !important;
+            }
+            .main-card {
+                height: calc(100vh - 20px - 80px) !important;
+                border-radius: 12px !important;
+            }
+            .message {
+                max-width: 90% !important;
+            }
+            .msg-bubble {
+                font-size: calc(32px * var(--font-scale)) !important;
+                padding: 8px 12px !important;
+            }
+            .quick-questions {
+                padding: 10px 12px !important;
+                gap: 8px !important;
+            }
+            .quick-questions button {
+                padding: 10px 16px !important;
+                font-size: calc(26px * var(--font-scale)) !important;
+            }
+            .chat-footer {
+                padding: 8px 12px !important;
+                gap: 8px !important;
+                padding-bottom: calc(8px + env(safe-area-inset-bottom)) !important;
+            }
+            .chat-input {
+                font-size: calc(30px * var(--font-scale)) !important;
+                padding: 10px 12px !important;
+            }
+            .send-btn, .clear-btn {
+                font-size: calc(28px * var(--font-scale)) !important;
+                padding: 8px 14px !important;
+            }
+            .mic-btn {
+                width: 44px !important;
+                height: 44px !important;
+                font-size: 24px !important;
+            }
+            .header-btn {
+                padding: 6px 10px !important;
+                font-size: calc(24px * var(--font-scale)) !important;
+            }
+            header h1 {
+                font-size: calc(44px * var(--font-scale)) !important;
+            }
+            header p {
+                font-size: calc(22px * var(--font-scale)) !important;
+                padding: 0 12px !important;
+            }
+            .chat-header-bar h2 {
+                font-size: calc(28px * var(--font-scale)) !important;
+            }
+            .chat-body {
+                padding: 12px !important;
             }
         }
     </style>
@@ -669,7 +732,7 @@ function closeFontModal() {
     document.getElementById('scaleInput').value = '';
 }
 
-// ========== 语音输入（仅电脑端有效，手机端已隐藏按钮） ==========
+// ========== 语音输入：先预检麦克风权限 ==========
 async function ensureMicrophonePermission() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -772,7 +835,7 @@ window.addEventListener('beforeunload', function() {
         mediaStream = null;
     }
 });
-// ====================================================
+// ================================================
 
 function toggleVoice() {
     voiceEnabled = !voiceEnabled;
@@ -864,58 +927,6 @@ function quickAsk(question) {
     input.value = question;
     send();
 }
-
-// ========== 移动端适配（隐藏侧边栏、布局调整，并已通过CSS隐藏麦克风） ==========
-(function() {
-    if (window.innerWidth <= 768) {
-        function applyMobileStyles() {
-            var sidebar = document.querySelector('.sidebar');
-            var chatMain = document.querySelector('.chat-main');
-            var chatContent = document.querySelector('.chat-content');
-            
-            if (sidebar) sidebar.style.display = 'none';
-            if (chatMain) {
-                chatMain.style.width = '100%';
-                chatMain.style.flex = '1';
-            }
-            if (chatContent) {
-                chatContent.style.display = 'flex';
-                chatContent.style.flexDirection = 'row';
-            }
-            
-            var style = document.createElement('style');
-            style.type = 'text/css';
-            style.innerHTML = `
-                body header { margin-bottom: 8px !important; }
-                body header p { display: none !important; }
-                body .chat-header-bar { padding: 8px 12px !important; }
-                body .chat-header-bar h2 { font-size: calc(20px * var(--font-scale)) !important; }
-                body .header-btn { font-size: calc(12px * var(--font-scale)) !important; padding: 4px 8px !important; }
-                body .chat-body { padding: 12px !important; }
-                body .msg-bubble { padding: 8px 12px !important; }
-                body .quick-questions button { font-size: calc(13px * var(--font-scale)) !important; padding: 6px 12px !important; }
-                body .chat-footer { padding: 8px 12px !important; }
-                body .chat-input { padding: 8px 12px !important; }
-                body .send-btn, body .clear-btn { padding: 6px 12px !important; }
-                body .message { max-width: 90% !important; }
-            `;
-            document.head.appendChild(style);
-        }
-        
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', applyMobileStyles);
-        } else {
-            applyMobileStyles();
-        }
-    }
-})();
-// ====================================
-
-document.addEventListener('click', function(e) {
-    if (e.target.classList && e.target.classList.contains('confirm-btn')) {
-        adjustFont();
-    }
-});
 
 document.getElementById("sendBtn").onclick = send;
 document.getElementById("clearBtn").onclick = clearChat;
