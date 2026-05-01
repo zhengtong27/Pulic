@@ -661,79 +661,108 @@ function closeFontModal() {
     document.getElementById('scaleInput').value = '';
 }
 
-// ---------- 语音输入（增强版，支持移动端） ----------
-function initRecognition() {
+// ---------- 语音输入（移动端终极修复版）----------
+let activeRecognition = null;
+
+function createSpeechRecognition() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-        alert("当前浏览器不支持语音输入，请手动输入。");
-        return false;
+        alert("您的浏览器不支持语音输入，请使用 Chrome 或 Edge 浏览器。");
+        return null;
     }
-    recognition = new SpeechRecognition();
+    const recognition = new SpeechRecognition();
     recognition.lang = lang === "zh" ? "zh-CN" : "en-US";
     recognition.interimResults = false;
     recognition.continuous = false;
     recognition.maxAlternatives = 1;
     
-    recognition.onresult = (event) => {
+    recognition.onstart = function() {
+        console.log("语音识别已启动");
+        isRecording = true;
+        const micBtn = document.getElementById("micBtn");
+        if (micBtn) micBtn.classList.add("recording");
+    };
+    
+    recognition.onresult = function(event) {
         const transcript = event.results[0][0].transcript;
-        document.getElementById("input").value = transcript;
+        const inputElement = document.getElementById("input");
+        if (inputElement) inputElement.value = transcript;
+        // 识别成功后自动停止
+        if (activeRecognition) {
+            try { activeRecognition.stop(); } catch(e) {}
+        }
         stopRec();
     };
     
-    recognition.onerror = (event) => {
+    recognition.onerror = function(event) {
         console.error("语音识别错误:", event.error);
-        let errMsg = "";
+        let errorMsg = "";
         switch (event.error) {
             case "not-allowed":
-                errMsg = "未获得麦克风权限，请检查浏览器设置并刷新重试。";
+                errorMsg = "麦克风权限被拒绝。请点击地址栏左侧锁图标 -> 网站设置 -> 麦克风 -> 选择“允许”，然后刷新页面。";
                 break;
             case "no-speech":
-                errMsg = "未检测到语音，请重试。";
+                errorMsg = "没有检测到语音，请重试。";
                 break;
-            case "network":
-                errMsg = "网络错误，请检查网络后重试。";
+            case "audio-capture":
+                errorMsg = "未找到麦克风设备，请检查耳机或麦克风。";
                 break;
             default:
-                errMsg = "语音识别失败，请稍后重试或手动输入。";
+                errorMsg = "语音识别失败，请重试。";
         }
-        alert(errMsg);
+        alert(errorMsg);
         stopRec();
     };
     
-    recognition.onend = () => {
+    recognition.onend = function() {
+        console.log("语音识别结束");
         stopRec();
     };
     
-    return true;
+    return recognition;
 }
 
 function toggleRec() {
-    if (!recognition) {
-        if (!initRecognition()) return;
-    }
-    if (isRecording) {
-        recognition.stop();
-        stopRec();
-    } else {
-        // 请求权限并开始
+    // 如果已有正在进行的识别，先停止
+    if (activeRecognition) {
         try {
-            recognition.start();
-            isRecording = true;
-            document.getElementById("micBtn").classList.add("recording");
-        } catch (e) {
-            console.error(e);
-            alert("无法启动语音识别，请刷新页面后重试。");
-            stopRec();
-        }
+            activeRecognition.abort();
+        } catch(e) {}
+        activeRecognition = null;
+    }
+    
+    // 如果当前是录音状态，则停止
+    if (isRecording) {
+        stopRec();
+        return;
+    }
+    
+    // 每次点击都全新创建实例，确保手势有效
+    const newRec = createSpeechRecognition();
+    if (!newRec) return;
+    
+    try {
+        newRec.start();
+        activeRecognition = newRec;
+        // isRecording 会在 onstart 中设置，但为了防止异步延迟，先手动设置 UI 状态
+        // 注意：实际录音标记将在 onstart 中正确设置
+    } catch (err) {
+        console.error("启动语音时发生异常:", err);
+        alert("启动语音失败，请刷新页面后重试。");
+        stopRec();
     }
 }
 
 function stopRec() {
-    isRecording = false;
-    document.getElementById("micBtn").classList.remove("recording");
-    if (recognition) {
-        try { recognition.abort(); } catch(e) {}
+    if (activeRecognition) {
+        try {
+            activeRecognition.abort();
+        } catch(e) {}
+        activeRecognition = null;
     }
+    isRecording = false;
+    const micBtn = document.getElementById("micBtn");
+    if (micBtn) micBtn.classList.remove("recording");
 }
 // ------------------------------------------------
 
