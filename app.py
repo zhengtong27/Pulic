@@ -661,23 +661,49 @@ function closeFontModal() {
     document.getElementById('scaleInput').value = '';
 }
 
+// ---------- 语音输入（增强版，支持移动端） ----------
 function initRecognition() {
-    if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-        alert("当前浏览器不支持语音输入，请使用 Chrome 或 Edge 最新版。");
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        alert("当前浏览器不支持语音输入，请手动输入。");
         return false;
     }
-    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognition = new Rec();
+    recognition = new SpeechRecognition();
     recognition.lang = lang === "zh" ? "zh-CN" : "en-US";
     recognition.interimResults = false;
     recognition.continuous = false;
-    recognition.onresult = (e) => {
-        const txt = e.results[0][0].transcript;
-        document.getElementById("input").value = txt;
+    recognition.maxAlternatives = 1;
+    
+    recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        document.getElementById("input").value = transcript;
         stopRec();
     };
-    recognition.onerror = stopRec;
-    recognition.onend = stopRec;
+    
+    recognition.onerror = (event) => {
+        console.error("语音识别错误:", event.error);
+        let errMsg = "";
+        switch (event.error) {
+            case "not-allowed":
+                errMsg = "未获得麦克风权限，请检查浏览器设置并刷新重试。";
+                break;
+            case "no-speech":
+                errMsg = "未检测到语音，请重试。";
+                break;
+            case "network":
+                errMsg = "网络错误，请检查网络后重试。";
+                break;
+            default:
+                errMsg = "语音识别失败，请稍后重试或手动输入。";
+        }
+        alert(errMsg);
+        stopRec();
+    };
+    
+    recognition.onend = () => {
+        stopRec();
+    };
+    
     return true;
 }
 
@@ -685,21 +711,31 @@ function toggleRec() {
     if (!recognition) {
         if (!initRecognition()) return;
     }
-    isRecording = !isRecording;
-    const btn = document.getElementById("micBtn");
-    btn.classList.toggle("recording");
     if (isRecording) {
-        recognition.start();
-    } else {
         recognition.stop();
+        stopRec();
+    } else {
+        // 请求权限并开始
+        try {
+            recognition.start();
+            isRecording = true;
+            document.getElementById("micBtn").classList.add("recording");
+        } catch (e) {
+            console.error(e);
+            alert("无法启动语音识别，请刷新页面后重试。");
+            stopRec();
+        }
     }
 }
 
 function stopRec() {
     isRecording = false;
     document.getElementById("micBtn").classList.remove("recording");
-    if (recognition) recognition.stop();
+    if (recognition) {
+        try { recognition.abort(); } catch(e) {}
+    }
 }
+// ------------------------------------------------
 
 function toggleVoice() {
     voiceEnabled = !voiceEnabled;
