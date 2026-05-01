@@ -662,31 +662,50 @@ function closeFontModal() {
     document.getElementById('scaleInput').value = '';
 }
 
-// ========== 增强的语音输入（预检麦克风 + 动态创建识别实例） ==========
+// ========== 增强的语音输入（移动端兼容修复版） ==========
 async function ensureMicrophonePermission() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-        alert("当前浏览器不支持语音识别，请使用 Chrome 或 Edge。");
+    // 1. 检查是否为 HTTPS 环境
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+        alert("⚠️ 麦克风功能仅支持 HTTPS 或 localhost 访问，请使用 https:// 开头的地址打开页面");
         return false;
     }
-    // 如果已经持有有效的媒体流，认为权限已获得
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        alert("当前浏览器不支持语音识别，请使用 Chrome、Edge 或 Safari 14.1+");
+        return false;
+    }
+
+    // 2. 如果已有有效流，直接返回
     if (mediaStream && mediaStream.active) {
         return true;
     }
+
+    // 3. 强制停止旧流，避免残留状态
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+    }
+
     try {
-        // 请求麦克风权限（会弹窗，同时验证硬件可用性）
+        // 移动端需要用户点击后调用，这里会触发系统授权弹窗
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaStream = stream;
         return true;
     } catch (err) {
-        console.error("麦克风授权申请失败:", err);
+        console.error("麦克风授权失败:", err);
         let msg = "";
         if (err.name === 'NotAllowedError') {
-            msg = "未获得麦克风权限。请点击地址栏左侧锁图标 -> 网站设置 -> 麦克风 -> 选择“允许”，然后刷新页面。";
+            msg = "❌ 麦克风权限被拒绝，请手动开启：\n" +
+                  "1. 点击地址栏左侧的锁图标/网站设置\n" +
+                  "2. 找到「麦克风」权限，设置为「允许」\n" +
+                  "3. 刷新页面后重试";
         } else if (err.name === 'NotFoundError') {
-            msg = "未检测到麦克风设备，请检查耳机或麦克风。";
+            msg = "未检测到麦克风设备，请检查耳机或麦克风是否正常连接";
+        } else if (err.name === 'NotSupportedError') {
+            msg = "当前环境不支持麦克风访问，请使用 HTTPS 访问";
         } else {
-            msg = "麦克风授权申请失败: " + err.message;
+            msg = `麦克风授权失败: ${err.message}`;
         }
         alert(msg);
         return false;
@@ -694,42 +713,47 @@ async function ensureMicrophonePermission() {
 }
 
 function startRecognition() {
-    // 如果已有正在识别的实例，先停止
+    // 先停止旧实例
     if (activeRecognition) {
         try { activeRecognition.abort(); } catch(e) {}
         activeRecognition = null;
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-
     const recognition = new SpeechRecognition();
+    
+    // 移动端关键配置
     recognition.lang = lang === "zh" ? "zh-CN" : "en-US";
     recognition.interimResults = false;
+    recognition.continuous = false; // 单次识别，避免移动端后台挂起
     recognition.maxAlternatives = 1;
-    
+
     recognition.onstart = () => {
         console.log("语音识别已启动");
         isRecording = true;
         const micBtn = document.getElementById("micBtn");
         if (micBtn) micBtn.classList.add("recording");
     };
+
     recognition.onresult = (event) => {
         const transcript = event.results[0][0].transcript;
         document.getElementById("input").value = transcript;
-        // 识别成功后自动停止录音
-        if (activeRecognition) {
-            try { activeRecognition.stop(); } catch(e) {}
-        }
+        // 自动停止
         stopRec();
     };
+
     recognition.onerror = (event) => {
         console.error("语音识别错误:", event.error);
-        if (event.error !== 'aborted' && event.error !== 'no-speech') {
+        if (event.error === 'not-allowed') {
+            alert("❌ 请在浏览器设置中允许麦克风权限");
+        } else if (event.error === 'no-speech') {
+            alert("未检测到语音，请靠近麦克风说话");
+        } else if (event.error !== 'aborted') {
             alert(`识别失败: ${event.error}`);
         }
         stopRec();
     };
+
     recognition.onend = () => {
         stopRec();
     };
@@ -745,15 +769,13 @@ function startRecognition() {
 }
 
 async function toggleRec() {
-    // 如果正在录音，则停止
     if (isRecording) {
         stopRec();
         return;
     }
-    // 先检查并获得麦克风权限
+    // 必须先获取权限，再启动识别
     const granted = await ensureMicrophonePermission();
     if (!granted) return;
-    // 启动语音识别
     startRecognition();
 }
 
@@ -767,8 +789,8 @@ function stopRec() {
     if (micBtn) micBtn.classList.remove("recording");
 }
 
-// 页面关闭时释放媒体流，节约资源
-window.addEventListener('beforeunload', function() {
+// 页面卸载时释放流
+window.addEventListener('beforeunload', () => {
     if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
