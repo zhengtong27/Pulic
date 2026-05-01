@@ -468,6 +468,13 @@ def index():
         .modal-mask.show {
             display: block;
         }
+
+        /* 移动端时隐藏麦克风按钮 */
+        @media (max-width: 768px) {
+            .mic-btn {
+                display: none !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -662,7 +669,7 @@ function closeFontModal() {
     document.getElementById('scaleInput').value = '';
 }
 
-// ========== 增强的语音输入（预检麦克风 + 动态创建识别实例 + 详细引导） ==========
+// ========== 语音输入（仅电脑端有效，手机端已隐藏按钮） ==========
 async function ensureMicrophonePermission() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -748,23 +755,6 @@ async function toggleRec() {
     const granted = await ensureMicrophonePermission();
     if (!granted) return;
     startRecognition();
-}
-
-async function resetMicrophonePermission() {
-    stopRec();
-    if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-        mediaStream = null;
-    }
-    alert("正在重置麦克风权限...请在弹出的权限请求中点击“允许”。");
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaStream = stream;
-        alert("✅ 麦克风权限已重置并获取成功！现在可以点击麦克风按钮开始录音了。");
-    } catch (err) {
-        console.error("重置麦克风权限失败:", err);
-        alert("重置麦克风权限失败，请手动检查浏览器设置。");
-    }
 }
 
 function stopRec() {
@@ -875,7 +865,7 @@ function quickAsk(question) {
     send();
 }
 
-// ========== 移动端适配（仅调整布局，不覆盖字体大小） ==========
+// ========== 移动端适配（隐藏侧边栏、布局调整，并已通过CSS隐藏麦克风） ==========
 (function() {
     if (window.innerWidth <= 768) {
         function applyMobileStyles() {
@@ -907,7 +897,6 @@ function quickAsk(question) {
                 body .chat-footer { padding: 8px 12px !important; }
                 body .chat-input { padding: 8px 12px !important; }
                 body .send-btn, body .clear-btn { padding: 6px 12px !important; }
-                body .mic-btn { width: 32px !important; height: 32px !important; }
                 body .message { max-width: 90% !important; }
             `;
             document.head.appendChild(style);
