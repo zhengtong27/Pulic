@@ -635,25 +635,15 @@ function adjustFont() {
     let rawValue = scaleInput.value.trim();
     let scale = parseFloat(rawValue);
     
-    // 验证输入
-    if (isNaN(scale) || scale <= 0) {
-        scale = 1;
-    }
-    
-    // 根据当前模式限制范围
+    if (isNaN(scale) || scale <= 0) scale = 1;
     if (fontOpt === 'enlarge') {
         scale = Math.min(4, Math.max(1, scale));
     } else {
         scale = Math.min(1, Math.max(0.3, scale));
     }
     
-    // 应用缩放
     document.documentElement.style.setProperty('--font-scale', scale);
-    
-    // 可选：将输入框的值同步为实际生效的值
     scaleInput.value = scale;
-    
-    // 关闭弹窗
     closeFontModal();
 }
 
@@ -801,7 +791,7 @@ function quickAsk(question) {
     send();
 }
 
-// ========== 完整移动端适配（包括强制隐藏侧边栏和样式优化） ==========
+// ========== 移动端适配（仅调整布局，不覆盖字体大小） ==========
 (function() {
     if (window.innerWidth <= 768) {
         function applyMobileStyles() {
@@ -823,18 +813,17 @@ function quickAsk(question) {
             style.type = 'text/css';
             style.innerHTML = `
                 body header { margin-bottom: 8px !important; }
-                body header h1 { font-size: 24px !important; margin-bottom: 2px !important; }
-                body header p { font-size: 12px !important; display: none !important; }
+                body header p { display: none !important; }
                 body .chat-header-bar { padding: 8px 12px !important; }
-                body .chat-header-bar h2 { font-size: 18px !important; }
-                body .header-btn { font-size: 12px !important; padding: 4px 8px !important; }
+                body .chat-header-bar h2 { font-size: calc(20px * var(--font-scale)) !important; }
+                body .header-btn { font-size: calc(12px * var(--font-scale)) !important; padding: 4px 8px !important; }
                 body .chat-body { padding: 12px !important; }
-                body .msg-bubble { font-size: 14px !important; padding: 8px 12px !important; }
-                body .quick-questions button { font-size: 13px !important; padding: 6px 12px !important; }
+                body .msg-bubble { padding: 8px 12px !important; }
+                body .quick-questions button { font-size: calc(13px * var(--font-scale)) !important; padding: 6px 12px !important; }
                 body .chat-footer { padding: 8px 12px !important; }
-                body .chat-input { font-size: 14px !important; padding: 8px 12px !important; }
-                body .send-btn, body .clear-btn { font-size: 14px !important; padding: 6px 12px !important; }
-                body .mic-btn { width: 32px !important; height: 32px !important; font-size: 16px !important; }
+                body .chat-input { padding: 8px 12px !important; }
+                body .send-btn, body .clear-btn { padding: 6px 12px !important; }
+                body .mic-btn { width: 32px !important; height: 32px !important; }
                 body .message { max-width: 90% !important; }
             `;
             document.head.appendChild(style);
@@ -849,7 +838,6 @@ function quickAsk(question) {
 })();
 // ====================================
 
-// 确保字体调节按钮在移动端也能稳定工作（额外保险）
 document.addEventListener('click', function(e) {
     if (e.target.classList && e.target.classList.contains('confirm-btn')) {
         adjustFont();
