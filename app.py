@@ -632,16 +632,29 @@ function selectOpt(opt) {
 
 function adjustFont() {
     const scaleInput = document.getElementById('scaleInput');
-    const inputVal = scaleInput.value.trim();
-    if (!inputVal || isNaN(inputVal) || Number(inputVal) <= 0) {
-        alert("请输入有效的正数倍数！");
-        scaleInput.focus();
-        return;
+    let rawValue = scaleInput.value.trim();
+    let scale = parseFloat(rawValue);
+    
+    // 验证输入
+    if (isNaN(scale) || scale <= 0) {
+        scale = 1;
     }
-    const scale = Number(inputVal);
+    
+    // 根据当前模式限制范围
+    if (fontOpt === 'enlarge') {
+        scale = Math.min(4, Math.max(1, scale));
+    } else {
+        scale = Math.min(1, Math.max(0.3, scale));
+    }
+    
+    // 应用缩放
     document.documentElement.style.setProperty('--font-scale', scale);
+    
+    // 可选：将输入框的值同步为实际生效的值
+    scaleInput.value = scale;
+    
+    // 关闭弹窗
     closeFontModal();
-    scaleInput.value = '';
 }
 
 function openFontModal() {
@@ -788,7 +801,7 @@ function quickAsk(question) {
     send();
 }
 
-// ========== 完整移动端适配 ==========
+// ========== 完整移动端适配（包括强制隐藏侧边栏和样式优化） ==========
 (function() {
     if (window.innerWidth <= 768) {
         function applyMobileStyles() {
@@ -835,6 +848,13 @@ function quickAsk(question) {
     }
 })();
 // ====================================
+
+// 确保字体调节按钮在移动端也能稳定工作（额外保险）
+document.addEventListener('click', function(e) {
+    if (e.target.classList && e.target.classList.contains('confirm-btn')) {
+        adjustFont();
+    }
+});
 
 document.getElementById("sendBtn").onclick = send;
 document.getElementById("clearBtn").onclick = clearChat;
