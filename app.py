@@ -583,8 +583,9 @@ let lang = "zh";
 let voiceEnabled = true;
 let fontOpt = "enlarge";
 const synth = window.speechSynthesis;
-let recognition = null;
 let isRecording = false;
+let activeRecognition = null;   // 语音识别实例
+let mediaStream = null;         // 用于保持权限的流对象
 
 const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
@@ -661,29 +662,29 @@ function closeFontModal() {
     document.getElementById('scaleInput').value = '';
 }
 
-// ---------- 语音输入（预检版） ----------
-let activeRecognition = null;
-let permissionIsRequested = false;
-
+// ========== 增强的语音输入（预检麦克风 + 动态创建识别实例） ==========
 async function ensureMicrophonePermission() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-        alert("当前浏览器不支持语音识别，请使用Chrome或Edge。");
+        alert("当前浏览器不支持语音识别，请使用 Chrome 或 Edge。");
         return false;
     }
-    // 若已获权，则返回true
-    if (permissionIsRequested) return true;
+    // 如果已经持有有效的媒体流，认为权限已获得
+    if (mediaStream && mediaStream.active) {
+        return true;
+    }
     try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-        permissionIsRequested = true;
+        // 请求麦克风权限（会弹窗，同时验证硬件可用性）
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStream = stream;
         return true;
     } catch (err) {
         console.error("麦克风授权申请失败:", err);
         let msg = "";
         if (err.name === 'NotAllowedError') {
-            msg = "未获得麦克风权限。请点击地址栏锁图标，将麦克风设为“允许”，刷新页面试用。";
+            msg = "未获得麦克风权限。请点击地址栏左侧锁图标 -> 网站设置 -> 麦克风 -> 选择“允许”，然后刷新页面。";
         } else if (err.name === 'NotFoundError') {
-            msg = "未检测到麦克风设备，请检查连接。";
+            msg = "未检测到麦克风设备，请检查耳机或麦克风。";
         } else {
             msg = "麦克风授权申请失败: " + err.message;
         }
@@ -692,18 +693,16 @@ async function ensureMicrophonePermission() {
     }
 }
 
-async function startRecognition() {
-    // 停止已有的识别
+function startRecognition() {
+    // 如果已有正在识别的实例，先停止
     if (activeRecognition) {
         try { activeRecognition.abort(); } catch(e) {}
         activeRecognition = null;
     }
-    // 先请求麦克风权
-    const hasPermission = await ensureMicrophonePermission();
-    if (!hasPermission) return;
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return;
+
     const recognition = new SpeechRecognition();
     recognition.lang = lang === "zh" ? "zh-CN" : "en-US";
     recognition.interimResults = false;
@@ -711,20 +710,29 @@ async function startRecognition() {
     
     recognition.onstart = () => {
         console.log("语音识别已启动");
-        document.getElementById('micBtn')?.classList.add("recording");
+        isRecording = true;
+        const micBtn = document.getElementById("micBtn");
+        if (micBtn) micBtn.classList.add("recording");
     };
     recognition.onresult = (event) => {
         const transcript = event.results[0][0].transcript;
         document.getElementById("input").value = transcript;
         // 识别成功后自动停止录音
-        if (activeRecognition) activeRecognition.stop();
+        if (activeRecognition) {
+            try { activeRecognition.stop(); } catch(e) {}
+        }
+        stopRec();
     };
     recognition.onerror = (event) => {
         console.error("语音识别错误:", event.error);
-        if (event.error !== 'aborted') alert(`识别失败: ${event.error}`);
+        if (event.error !== 'aborted' && event.error !== 'no-speech') {
+            alert(`识别失败: ${event.error}`);
+        }
         stopRec();
     };
-    recognition.onend = () => stopRec();
+    recognition.onend = () => {
+        stopRec();
+    };
 
     try {
         recognition.start();
@@ -735,7 +743,38 @@ async function startRecognition() {
         stopRec();
     }
 }
-// ------------------------------------------------
+
+async function toggleRec() {
+    // 如果正在录音，则停止
+    if (isRecording) {
+        stopRec();
+        return;
+    }
+    // 先检查并获得麦克风权限
+    const granted = await ensureMicrophonePermission();
+    if (!granted) return;
+    // 启动语音识别
+    startRecognition();
+}
+
+function stopRec() {
+    if (activeRecognition) {
+        try { activeRecognition.abort(); } catch(e) {}
+        activeRecognition = null;
+    }
+    isRecording = false;
+    const micBtn = document.getElementById("micBtn");
+    if (micBtn) micBtn.classList.remove("recording");
+}
+
+// 页面关闭时释放媒体流，节约资源
+window.addEventListener('beforeunload', function() {
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+    }
+});
+// ================================================
 
 function toggleVoice() {
     voiceEnabled = !voiceEnabled;
@@ -875,6 +914,7 @@ function quickAsk(question) {
 })();
 // ====================================
 
+// 确保字体调节确认按钮也能在移动端可靠工作
 document.addEventListener('click', function(e) {
     if (e.target.classList && e.target.classList.contains('confirm-btn')) {
         adjustFont();
