@@ -209,7 +209,7 @@ def index():
             border-radius: 8px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
             padding: 15px;
-            z-index: 100;
+            z-index: 1000;
             display: none;
             min-width: 280px;
         }
@@ -462,7 +462,8 @@ def index():
             left: 0;
             width: 100%;
             height: 100%;
-            z-index: 98;
+            z-index: 999;
+            background: rgba(0,0,0,0.5);
             display: none;
         }
         .modal-mask.show {
@@ -486,13 +487,13 @@ def index():
                 <div class="font-modal" id="fontModal">
                     <div class="modal-title">字体大小调节</div>
                     <div class="opt-group">
-                        <button class="opt-btn active" id="enlargeBtn" onclick="selectOpt('enlarge')">放大</button>
-                        <button class="opt-btn" id="narrowBtn" onclick="selectOpt('narrow')">缩小</button>
+                        <button class="opt-btn active" id="enlargeBtn">放大</button>
+                        <button class="opt-btn" id="narrowBtn">缩小</button>
                     </div>
                     <div class="input-group">
                         <input type="number" id="scaleInput" placeholder="请输入倍数" step="0.5" value="">
                     </div>
-                    <button class="confirm-btn" onclick="adjustFont()">确认调节</button>
+                    <button class="confirm-btn" id="confirmFontBtn">确认调节</button>
                     <div class="tip-text">放大：1-4（步长0.5）| 缩小：0.3-1（步长0.1）</div>
                 </div>
             </div>
@@ -579,6 +580,9 @@ def index():
 <div class="modal-mask" id="modalMask" onclick="closeFontModal()"></div>
 
 <script>
+// ============================================================
+// 全局变量
+// ============================================================
 let lang = "zh";
 let voiceEnabled = true;
 let fontOpt = "enlarge";
@@ -587,6 +591,7 @@ let isRecording = false;
 let activeRecognition = null;
 let mediaStream = null;
 
+// 头像 SVG（省略，与原来相同）
 const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
     <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
@@ -604,16 +609,15 @@ const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
 </svg>`;
 
-var inputElement = document.getElementById("input");
-if (inputElement) {
-    inputElement.removeAttribute("readonly");
-    inputElement.removeAttribute("disabled");
-}
-
+// ============================================================
+// 字体调节
+// ============================================================
 function selectOpt(opt) {
     fontOpt = opt;
-    document.getElementById('enlargeBtn').className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
-    document.getElementById('narrowBtn').className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
+    const enlargeBtn = document.getElementById('enlargeBtn');
+    const narrowBtn = document.getElementById('narrowBtn');
+    enlargeBtn.className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
+    narrowBtn.className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
     const scaleInput = document.getElementById('scaleInput');
     if (opt === 'enlarge') {
         scaleInput.min = 1;
@@ -634,7 +638,6 @@ function adjustFont() {
     const scaleInput = document.getElementById('scaleInput');
     let rawValue = scaleInput.value.trim();
     let scale = parseFloat(rawValue);
-    
     if (isNaN(scale) || scale <= 0) {
         scale = 1;
     }
@@ -643,26 +646,81 @@ function adjustFont() {
     } else {
         scale = Math.min(1, Math.max(0.3, scale));
     }
-    
     document.documentElement.style.setProperty('--font-scale', scale);
     scaleInput.value = scale;
     closeFontModal();
 }
 
 function openFontModal() {
-    document.getElementById('fontModal').classList.add('show');
-    document.getElementById('modalMask').classList.add('show');
+    const modal = document.getElementById('fontModal');
+    const mask = document.getElementById('modalMask');
+    modal.classList.add('show');
+    mask.classList.add('show');
     document.getElementById('scaleInput').focus();
 }
 
 function closeFontModal() {
-    document.getElementById('fontModal').classList.remove('show');
-    document.getElementById('modalMask').classList.remove('show');
+    const modal = document.getElementById('fontModal');
+    const mask = document.getElementById('modalMask');
+    modal.classList.remove('show');
+    mask.classList.remove('show');
     selectOpt('enlarge');
     document.getElementById('scaleInput').value = '';
 }
 
-// ========== 增强的语音输入（预检麦克风 + 动态创建识别实例 + 详细引导） ==========
+// ============================================================
+// 语音播报
+// ============================================================
+function toggleVoice() {
+    voiceEnabled = !voiceEnabled;
+    const btn = document.getElementById("voiceBtn");
+    btn.innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
+    if (!voiceEnabled) {
+        if (synth) synth.cancel();
+    } else {
+        const lastMsg = getLastAssistantMessage();
+        if (lastMsg) speak(lastMsg);
+    }
+}
+
+function getLastAssistantMessage() {
+    const messages = document.querySelectorAll('.message.assistant .msg-bubble');
+    if (messages.length === 0) return null;
+    const lastBubble = messages[messages.length - 1];
+    return lastBubble.innerText.trim();
+}
+
+function speak(text) {
+    if (!voiceEnabled) return;
+    if (!text) return;
+    if (synth) synth.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = lang === "zh" ? "zh-CN" : "en-US";
+    utterance.onerror = function(e) {
+        console.error("语音播报失败:", e);
+    };
+    synth.speak(utterance);
+}
+
+// ============================================================
+// 中英文切换
+// ============================================================
+async function switchLang() {
+    lang = lang === "zh" ? "en" : "zh";
+    try {
+        await fetch("/api/switch_lang", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lang })
+        });
+    } catch(e) { console.error("语言切换API调用失败", e); }
+    document.getElementById("langBtn").innerText = lang === "zh" ? "切换英文" : "切换中文";
+    clearChat();
+}
+
+// ============================================================
+// 语音输入 (PC 端也支持，但需要 HTTPS 或 localhost)
+// ============================================================
 async function ensureMicrophonePermission() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -670,25 +728,17 @@ async function ensureMicrophonePermission() {
         return false;
     }
     if (mediaStream && mediaStream.active) return true;
-    
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaStream = stream;
-        alert("✅ 麦克风权限已获取！请再次点击麦克风按钮开始录音。");
+        // 不要自动再次弹出提示，因为用户已经授权
         return true;
     } catch (err) {
         console.error("麦克风授权失败:", err);
         if (err.name === 'NotAllowedError') {
-            alert(
-                "❌ 无法获取麦克风权限。\n\n" +
-                "请按以下步骤手动开启：\n" +
-                "1. 点击地址栏左侧的“锁”图标 🔒\n" +
-                "2. 进入“网站设置”\n" +
-                "3. 找到“麦克风”，设置为“允许”\n" +
-                "4. 刷新页面后再次点击麦克风按钮"
-            );
+            alert("无法获取麦克风权限。请点击地址栏左侧锁图标 → 网站设置 → 麦克风 → 选择“允许”，然后刷新页面。");
         } else if (err.name === 'NotFoundError') {
-            alert("❌ 未检测到麦克风设备，请检查耳机或麦克风连接。");
+            alert("未检测到麦克风设备，请检查耳机或麦克风连接。");
         } else {
             alert("麦克风授权申请失败: " + err.message);
         }
@@ -703,16 +753,14 @@ function startRecognition() {
     }
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return;
-
     const recognition = new SpeechRecognition();
     recognition.lang = lang === "zh" ? "zh-CN" : "en-US";
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
-    
     recognition.onstart = () => {
-        console.log("语音识别已启动，请说话...");
         isRecording = true;
-        document.getElementById("micBtn")?.classList.add("recording");
+        const btn = document.getElementById("micBtn");
+        if (btn) btn.classList.add("recording");
     };
     recognition.onresult = (event) => {
         const transcript = event.results[0][0].transcript;
@@ -721,15 +769,14 @@ function startRecognition() {
     };
     recognition.onerror = (event) => {
         console.error("语音识别错误:", event.error);
-        if (event.error === 'not-allowed' && !mediaStream) {
-            alert("❌ 请先点击“允许麦克风权限”按钮，再点击麦克风图标开始录音。");
+        if (event.error === 'not-allowed') {
+            alert("麦克风权限不足，请刷新页面后重新授权。");
         } else if (event.error !== 'aborted' && event.error !== 'no-speech') {
             alert(`语音识别出错: ${event.error}`);
         }
         stopRec();
     };
     recognition.onend = () => stopRec();
-
     try {
         recognition.start();
         activeRecognition = recognition;
@@ -750,72 +797,34 @@ async function toggleRec() {
     startRecognition();
 }
 
-async function resetMicrophonePermission() {
-    stopRec();
-    if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-        mediaStream = null;
-    }
-    alert("正在重置麦克风权限...请在弹出的权限请求中点击“允许”。");
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaStream = stream;
-        alert("✅ 麦克风权限已重置并获取成功！现在可以点击麦克风按钮开始录音了。");
-    } catch (err) {
-        console.error("重置麦克风权限失败:", err);
-        alert("重置麦克风权限失败，请手动检查浏览器设置。");
-    }
-}
-
 function stopRec() {
     if (activeRecognition) {
         try { activeRecognition.abort(); } catch(e) {}
         activeRecognition = null;
     }
     isRecording = false;
-    document.getElementById("micBtn")?.classList.remove("recording");
+    const btn = document.getElementById("micBtn");
+    if (btn) btn.classList.remove("recording");
 }
 
+// 页面关闭时释放麦克风流
 window.addEventListener('beforeunload', function() {
     if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
     }
+    if (synth) synth.cancel();
 });
-// ====================================================
 
-function toggleVoice() {
-    voiceEnabled = !voiceEnabled;
-    document.getElementById("voiceBtn").innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
-    if (!voiceEnabled) {
-        synth.cancel();
-    } else {
-        const lastMsg = getLastAssistantMessage();
-        if (lastMsg) speak(lastMsg);
-    }
-}
-
-function getLastAssistantMessage() {
-    const messages = document.querySelectorAll('.message.assistant .msg-bubble');
-    if (messages.length === 0) return null;
-    const lastBubble = messages[messages.length - 1];
-    let text = lastBubble.innerText || lastBubble.textContent;
-    return text.trim();
-}
-
-function speak(text) {
-    if (!voiceEnabled) return;
-    synth.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang === "zh" ? "zh-CN" : "en-US";
-    synth.speak(u);
-}
-
+// ============================================================
+// 消息发送与显示
+// ============================================================
 async function send() {
-    const text = document.getElementById("input").value.trim();
+    const inputEl = document.getElementById("input");
+    const text = inputEl.value.trim();
     if (!text) return;
     addMsg("user", text);
-    document.getElementById("input").value = "";
+    inputEl.value = "";
     
     const loadingDiv = document.createElement("div");
     loadingDiv.className = "message assistant loading-message";
@@ -853,36 +862,25 @@ function addMsg(role, text) {
     body.scrollTop = body.scrollHeight;
 }
 
-async function switchLang() {
-    lang = lang === "zh" ? "en" : "zh";
-    await fetch("/api/switch_lang", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang })
-    });
-    document.getElementById("langBtn").innerText = lang === "zh" ? "切换英文" : "切换中文";
-    clearChat();
-}
-
 function clearChat() {
     const body = document.getElementById("chatBody");
     body.innerHTML = `<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang === "zh" ? "你好！我是脑卒中智能助手~" : "Hello! I'm stroke assistant~"}</div></div>`;
 }
 
 function quickAsk(question) {
-    const input = document.getElementById("input");
-    input.value = question;
+    document.getElementById("input").value = question;
     send();
 }
 
-// ========== 移动端适配（仅调整布局，不覆盖字体大小） ==========
+// ============================================================
+// 移动端适配 (仅调整布局，不影响 PC 按钮功能)
+// ============================================================
 (function() {
     if (window.innerWidth <= 768) {
         function applyMobileStyles() {
-            var sidebar = document.querySelector('.sidebar');
-            var chatMain = document.querySelector('.chat-main');
-            var chatContent = document.querySelector('.chat-content');
-            
+            const sidebar = document.querySelector('.sidebar');
+            const chatMain = document.querySelector('.chat-main');
+            const chatContent = document.querySelector('.chat-content');
             if (sidebar) sidebar.style.display = 'none';
             if (chatMain) {
                 chatMain.style.width = '100%';
@@ -892,10 +890,8 @@ function quickAsk(question) {
                 chatContent.style.display = 'flex';
                 chatContent.style.flexDirection = 'row';
             }
-            
-            var style = document.createElement('style');
-            style.type = 'text/css';
-            style.innerHTML = `
+            const style = document.createElement('style');
+            style.textContent = `
                 body header { margin-bottom: 8px !important; }
                 body header p { display: none !important; }
                 body .chat-header-bar { padding: 8px 12px !important; }
@@ -912,7 +908,6 @@ function quickAsk(question) {
             `;
             document.head.appendChild(style);
         }
-        
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', applyMobileStyles);
         } else {
@@ -920,30 +915,46 @@ function quickAsk(question) {
         }
     }
 })();
-// ====================================
 
-document.addEventListener('click', function(e) {
-    if (e.target.classList && e.target.classList.contains('confirm-btn')) {
-        adjustFont();
+// ============================================================
+// 事件绑定 (确保 PC 端所有功能正常)
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    // 字体调节相关
+    document.getElementById("fontBtn").onclick = openFontModal;
+    document.getElementById("confirmFontBtn").onclick = adjustFont;
+    document.getElementById("enlargeBtn").onclick = () => selectOpt('enlarge');
+    document.getElementById("narrowBtn").onclick = () => selectOpt('narrow');
+    // 中英文切换
+    document.getElementById("langBtn").onclick = switchLang;
+    // 语音播报
+    document.getElementById("voiceBtn").onclick = toggleVoice;
+    // 语音输入
+    document.getElementById("micBtn").onclick = toggleRec;
+    // 发送/清空/快捷提问
+    document.getElementById("sendBtn").onclick = send;
+    document.getElementById("clearBtn").onclick = clearChat;
+    document.getElementById("input").onkeydown = function(e) {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            send();
+        }
+    };
+    // 点击弹窗外部关闭字体调节弹窗
+    document.getElementById("modalMask").onclick = closeFontModal;
+    document.getElementById("fontModal").onclick = function(e) {
+        e.stopPropagation();
+    };
+    document.getElementById("scaleInput").onkeydown = function(e) {
+        if (e.key === "Enter") adjustFont();
+    };
+    // 确保输入框初始不为只读
+    const inputEl = document.getElementById("input");
+    if (inputEl) {
+        inputEl.removeAttribute("readonly");
+        inputEl.removeAttribute("disabled");
     }
 });
-
-document.getElementById("sendBtn").onclick = send;
-document.getElementById("clearBtn").onclick = clearChat;
-document.getElementById("langBtn").onclick = switchLang;
-document.getElementById("micBtn").onclick = toggleRec;
-document.getElementById("voiceBtn").onclick = toggleVoice;
-document.getElementById("fontBtn").onclick = openFontModal;
-
-document.getElementById("input").onkeydown = function(e) {
-    if (e.key === "Enter") {
-        e.preventDefault();
-        send();
-    }
-};
-
-document.getElementById("fontModal").onclick = e => e.stopPropagation();
-document.getElementById("scaleInput").onkeydown = e => e.key === "Enter" && adjustFont();
 </script>
 </body>
 </html>
