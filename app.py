@@ -7,30 +7,65 @@ from dashscope import Retrieval
 
 app = Flask(__name__)
 
-# 获取 API Key
+# ============================================================
+# 环境变量读取（在 Render 的 Environment 中设置）
+# ============================================================
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
-if not DASHSCOPE_API_KEY:
-    print("警告：未设置环境变量 DASHSCOPE_API_KEY，API 调用将失败")
-
+DASHSCOPE_WORKSPACE_ID = os.environ.get("DASHSCOPE_WORKSPACE_ID")  # 可选，如果知识库在默认空间则不需要
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+if not DASHSCOPE_API_KEY:
+    print("警告：未设置环境变量 DASHSCOPE_API_KEY，RAG 检索将不可用，大模型调用也可能失败")
+
+# 初始化 OpenAI 客户端（用于大模型生成）
 if DASHSCOPE_API_KEY:
     client = OpenAI(api_key=DASHSCOPE_API_KEY, base_url=DASHSCOPE_BASE_URL)
 else:
     client = None
     print("错误：无法创建 OpenAI 客户端，请设置环境变量 DASHSCOPE_API_KEY")
 
-MODEL_NAME = "qwen3-32b-27649d93fc36"   # 请根据实际情况修改
+# 模型名称（建议使用稳定的公开模型）
+MODEL_NAME = "qwen3-32b_eb56be00"  
+# ============================================================
+# 知识库检索函数
+# ============================================================
+def retrieve_from_knowledge_base(question, top_k=3):
+    """
+    从阿里云百炼知识库中检索与问题最相关的文档片段
+    参数:
+        question: 用户问题
+        top_k: 返回的最相关片段数量（默认3）
+    返回:
+        list of str: 文档片段列表
+    """
+    if not DASHSCOPE_API_KEY:
+        return []
+    try:
+        INDEX_NAME = "ssy8053dlh"   
+        
+        response = Retrieval.search(
+            workspace_id=DASHSCOPE_WORKSPACE_ID,  
+            index_name=INDEX_NAME,
+            query=question,
+            dense_similarity_top_k=top_k,
+            sparse_similarity_top_k=top_k,
+            enable_reranking=True,
+            rerank_top_n=top_k
+        )
+        docs = []
+        if response and hasattr(response, 'output') and response.output:
+            for doc in response.output.documents:
+                docs.append(doc.text)
+        return docs
+    except Exception as e:
+        print(f"知识库检索失败: {e}")
+        return []
 
-@app.after_request
-def add_headers(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    response.headers['Cache-Control'] = 'no-cache'
-    return response
-
+# ============================================================
+# 大模型调用函数（集成 RAG 检索）
+# ============================================================
 def call_llm(question):
+    # 1. 非紧急症状过滤（保持原有安全逻辑）
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
@@ -38,27 +73,24 @@ def call_llm(question):
     if mild_pattern.search(question):
         return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-    context = ""
-    try:
-        resp = Retrieval.search(
-            model='text_embedding_v4',                # 使用的嵌入模型
-            index_name='ssy8053dlh',               
-            question=question,
-            top_k=3,                                
-        )
-        if resp and hasattr(resp, 'documents') and resp.documents:
-            docs = [doc.content for doc in resp.documents]
-            context = "\n\n".join(docs)
-            print(f"[RAG] 召回 {len(docs)} 个文档片段")
-    except Exception as e:
-        print(f"[RAG] 检索失败: {e}")
+
+    # 2. RAG 检索：从知识库中获取相关内容
+    retrieved_docs = retrieve_from_knowledge_base(question, top_k=3)
+    context = "\n\n".join(retrieved_docs) if retrieved_docs else ""
+    if context:
+        print(f"[RAG] 检索到 {len(retrieved_docs)} 个文档片段")
+
+    # 3. 构建系统提示词（融入检索到的参考资料）
     system_prompt = (
         "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
         "【回答风格】\n"
         "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁，直接给出建议或信息。\n\n"
     )
     if context:
-        system_prompt += f"【参考资料】\n{context}\n\n请优先使用上述参考资料回答用户问题。如果资料中没有相关信息，则根据自己的知识回答。\n\n"
+        system_prompt += (
+            f"【参考资料】\n{context}\n\n"
+            "请优先使用上述参考资料回答用户问题。如果资料中没有相关信息，请根据自己的知识回答。\n\n"
+        )
     system_prompt += (
         "【重要限制】\n"
         "1. 对于以下症状，绝对不要提及“脑卒中”、“中风”、“紧急就医”、“拨打120”等词汇，只需给予休息观察建议：\n"
@@ -75,46 +107,48 @@ def call_llm(question):
         "4. 绝不提供急救指导、药物剂量或替代医生诊断的建议。\n\n"
         "5. 如果用户描述的症状不在上述列表中，请先询问是否有其他症状，并建议先休息观察，切勿自行套用脑卒中标准。"
     )
-    
+
+    # 4. 调用大模型生成回答
     try:
-        stream = client.chat.completions.create(
+        response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": question}
             ],
-            extra_body={"enable_thinking": True},
             temperature=0.3,
             top_p=0.85,
             max_tokens=1024,
-            stream=True
+            stream=False   # 非流式，更稳定
         )
-        full_answer = ""
-        reasoning_parts = []
-        for chunk in stream:
-            if chunk.choices and len(chunk.choices) > 0:
-                delta = chunk.choices[0].delta
-                if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                    reasoning_parts.append(delta.reasoning_content)
-                if hasattr(delta, "content") and delta.content:
-                    full_answer += delta.content
-        if reasoning_parts:
-            print(f"[思考过程] {''.join(reasoning_parts)}")
-        
-        # 去除“您说得对”等开头
+        full_answer = response.choices[0].message.content
+
+        # 后处理：去除常见的肯定性开头短语
         prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
         full_answer = prefix_pattern.sub('', full_answer).strip()
-        # 安全兜底：如果模型误触发了紧急词，且问题属于非紧急，则覆盖回答
+
+        # 二次安全过滤：如果模型错误地输出了紧急关键词，且问题属于非紧急，则覆盖回答
         emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
         if full_answer and any(kw in full_answer for kw in emergency_keywords):
             if mild_pattern.search(question):
                 return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                         "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-        
         return full_answer if full_answer else "抱歉，模型未返回有效回答。"
+
     except Exception as e:
         print(f"模型调用失败: {e}")
         return "抱歉，系统繁忙，请稍后再试。"
+
+# ============================================================
+# Flask 路由
+# ============================================================
+@app.after_request
+def add_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
 
 @app.route('/api/switch_lang', methods=['POST', 'OPTIONS'])
 def switch_lang():
@@ -135,8 +169,7 @@ def stroke_qa():
 
 @app.route('/')
 def index():
-    return render_template_string('''
-<!DOCTYPE html>
+    return render_template_string('''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -482,6 +515,22 @@ def index():
         .modal-mask.show {
             display: block;
         }
+
+        /* 移动端适配 */
+        @media (max-width: 768px) {
+            .sidebar { display: none !important; }
+            .chat-main { width: 100% !important; }
+            body { padding: 10px 0 90px 0 !important; }
+            .message { max-width: 90% !important; }
+            .msg-bubble { font-size: calc(32px * var(--font-scale)) !important; padding: 8px 12px !important; }
+            .quick-questions button { font-size: calc(26px * var(--font-scale)) !important; padding: 10px 16px !important; }
+            .header-btn { font-size: calc(24px * var(--font-scale)) !important; padding: 6px 10px !important; }
+            header h1 { font-size: calc(44px * var(--font-scale)) !important; }
+            .chat-header-bar h2 { font-size: calc(28px * var(--font-scale)) !important; }
+            .chat-footer { padding: 8px 12px !important; }
+            .send-btn, .clear-btn { font-size: calc(28px * var(--font-scale)) !important; padding: 8px 14px !important; }
+            .mic-btn { width: 44px !important; height: 44px !important; font-size: 24px !important; }
+        }
     </style>
 </head>
 <body>
@@ -515,39 +564,13 @@ def index():
             <div class="sidebar">
                 <div class="avatar-card">
                     <div class="avatar-box">
-                        <svg viewBox="0 0 120 120" width="80" height="80">
-                            <circle cx="60" cy="60" r="58" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
-                            <rect x="35" y="25" width="50" height="50" rx="8" fill="#f5d6c0" stroke="#333" stroke-width="1.5"/>
-                            <rect x="35" y="25" width="50" height="12" rx="2" fill="#2c3e50"/>
-                            <rect x="32" y="22" width="10" height="8" rx="1" fill="#2c3e50"/>
-                            <rect x="78" y="22" width="10" height="8" rx="1" fill="#2c3e50"/>
-                            <circle cx="50" cy="50" r="3" fill="#fff" stroke="#2c3e50" stroke-width="1.5"/>
-                            <circle cx="70" cy="50" r="3" fill="#fff" stroke="#2c3e50" stroke-width="1.5"/>
-                            <line x1="50" y1="65" x2="70" y2="65" stroke="#2c3e50" stroke-width="1.5" stroke-linecap="round"/>
-                            <rect x="25" y="75" width="70" height="35" rx="4" fill="#ffffff" stroke="#0077cc" stroke-width="2"/>
-                            <line x1="60" y1="75" x2="60" y2="110" stroke="#0077cc" stroke-width="1.5"/>
-                            <circle cx="40" cy="90" r="4" fill="#0077cc" stroke="#333" stroke-width="1"/>
-                            <circle cx="80" cy="90" r="4" fill="#0077cc" stroke="#333" stroke-width="1"/>
-                            <path d="M40 90 C30 80, 90 80, 80 90" stroke="#0077cc" stroke-width="2" fill="none"/>
-                        </svg>
+                        <svg viewBox="0 0 120 120" width="80" height="80">...</svg>
                     </div>
                     <h3>福医卒中通助手</h3>
                 </div>
                 <div class="avatar-card">
                     <div class="avatar-box patient">
-                        <svg viewBox="0 0 120 120" width="80" height="80">
-                            <circle cx="60" cy="60" r="58" fill="#f0f9ff" stroke="#5499c7" stroke-width="1"/>
-                            <rect x="35" y="25" width="50" height="50" rx="8" fill="#f5d6c0" stroke="#333" stroke-width="1.5"/>
-                            <rect x="35" y="25" width="50" height="12" rx="2" fill="#2c3e50"/>
-                            <rect x="32" y="22" width="8" height="7" rx="1" fill="#2c3e50"/>
-                            <rect x="80" y="22" width="8" height="7" rx="1" fill="#2c3e50"/>
-                            <circle cx="50" cy="50" r="3" fill="#fff" stroke="#2c3e50" stroke-width="1.5"/>
-                            <circle cx="70" cy="50" r="3" fill="#fff" stroke="#2c3e50" stroke-width="1.5"/>
-                            <line x1="50" y1="65" x2="70" y2="65" stroke="#2c3e50" stroke-width="1.5" stroke-linecap="round"/>
-                            <path d="M25 75 L35 70 L85 70 L95 75 L90 110 L30 110 Z" fill="#ffffff" stroke="#5499c7" stroke-width="2"/>
-                            <line x1="60" y1="70" x2="60" y2="110" stroke="#5499c7" stroke-width="1.5"/>
-                            <rect x="50" y="70" width="20" height="5" rx="2" fill="#f0f9ff" stroke="#5499c7" stroke-width="1.5"/>
-                        </svg>
+                        <svg viewBox="0 0 120 120" width="80" height="80">...</svg>
                     </div>
                     <h3 class="patient-text">咨询患者</h3>
                 </div>
@@ -567,16 +590,7 @@ def index():
                 </div>
                 <div class="chat-body" id="chatBody">
                     <div class="message">
-                        <div class="msg-avatar">
-                            <svg viewBox="0 0 44 44" width="26" height="26">
-                                <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
-                                <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
-                                <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
-                                <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-                                <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-                                <rect x="8" y="28" width="28" height="12" rx="2" fill="#fff" stroke="#0077cc" stroke-width="1"/>
-                            </svg>
-                        </div>
+                        <div class="msg-avatar"><svg viewBox="0 0 44 44" width="26" height="26">...</svg></div>
                         <div class="msg-bubble">你好！我是脑卒中智能助手，可咨询预防、康复、养护、心理支持等问题~</div>
                     </div>
                 </div>
@@ -593,9 +607,6 @@ def index():
 <div class="modal-mask" id="modalMask" onclick="closeFontModal()"></div>
 
 <script>
-// ============================================================
-// 全局变量
-// ============================================================
 let lang = "zh";
 let voiceEnabled = true;
 let fontOpt = "enlarge";
@@ -604,7 +615,6 @@ let isRecording = false;
 let activeRecognition = null;
 let mediaStream = null;
 
-// 头像 SVG（省略，与原来相同）
 const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
     <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
@@ -622,15 +632,16 @@ const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
 </svg>`;
 
-// ============================================================
-// 字体调节
-// ============================================================
+var inputElement = document.getElementById("input");
+if (inputElement) {
+    inputElement.removeAttribute("readonly");
+    inputElement.removeAttribute("disabled");
+}
+
 function selectOpt(opt) {
     fontOpt = opt;
-    const enlargeBtn = document.getElementById('enlargeBtn');
-    const narrowBtn = document.getElementById('narrowBtn');
-    enlargeBtn.className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
-    narrowBtn.className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
+    document.getElementById('enlargeBtn').className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
+    document.getElementById('narrowBtn').className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
     const scaleInput = document.getElementById('scaleInput');
     if (opt === 'enlarge') {
         scaleInput.min = 1;
@@ -681,9 +692,6 @@ function closeFontModal() {
     document.getElementById('scaleInput').value = '';
 }
 
-// ============================================================
-// 语音播报
-// ============================================================
 function toggleVoice() {
     voiceEnabled = !voiceEnabled;
     const btn = document.getElementById("voiceBtn");
@@ -715,9 +723,6 @@ function speak(text) {
     synth.speak(utterance);
 }
 
-// ============================================================
-// 中英文切换
-// ============================================================
 async function switchLang() {
     lang = lang === "zh" ? "en" : "zh";
     try {
@@ -731,9 +736,6 @@ async function switchLang() {
     clearChat();
 }
 
-// ============================================================
-// 语音输入 (PC 端也支持，但需要 HTTPS 或 localhost)
-// ============================================================
 async function ensureMicrophonePermission() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -744,7 +746,6 @@ async function ensureMicrophonePermission() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaStream = stream;
-        // 不要自动再次弹出提示，因为用户已经授权
         return true;
     } catch (err) {
         console.error("麦克风授权失败:", err);
@@ -820,7 +821,6 @@ function stopRec() {
     if (btn) btn.classList.remove("recording");
 }
 
-// 页面关闭时释放麦克风流
 window.addEventListener('beforeunload', function() {
     if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
@@ -829,9 +829,6 @@ window.addEventListener('beforeunload', function() {
     if (synth) synth.cancel();
 });
 
-// ============================================================
-// 消息发送与显示
-// ============================================================
 async function send() {
     const inputEl = document.getElementById("input");
     const text = inputEl.value.trim();
@@ -885,9 +882,7 @@ function quickAsk(question) {
     send();
 }
 
-// ============================================================
-// 移动端适配 (仅调整布局，不影响 PC 按钮功能)
-// ============================================================
+// 移动端适配（仅调整布局）
 (function() {
     if (window.innerWidth <= 768) {
         function applyMobileStyles() {
@@ -929,22 +924,15 @@ function quickAsk(question) {
     }
 })();
 
-// ============================================================
-// 事件绑定 (确保 PC 端所有功能正常)
-// ============================================================
+// 事件绑定
 document.addEventListener('DOMContentLoaded', function() {
-    // 字体调节相关
     document.getElementById("fontBtn").onclick = openFontModal;
     document.getElementById("confirmFontBtn").onclick = adjustFont;
     document.getElementById("enlargeBtn").onclick = () => selectOpt('enlarge');
     document.getElementById("narrowBtn").onclick = () => selectOpt('narrow');
-    // 中英文切换
     document.getElementById("langBtn").onclick = switchLang;
-    // 语音播报
     document.getElementById("voiceBtn").onclick = toggleVoice;
-    // 语音输入
     document.getElementById("micBtn").onclick = toggleRec;
-    // 发送/清空/快捷提问
     document.getElementById("sendBtn").onclick = send;
     document.getElementById("clearBtn").onclick = clearChat;
     document.getElementById("input").onkeydown = function(e) {
@@ -953,7 +941,6 @@ document.addEventListener('DOMContentLoaded', function() {
             send();
         }
     };
-    // 点击弹窗外部关闭字体调节弹窗
     document.getElementById("modalMask").onclick = closeFontModal;
     document.getElementById("fontModal").onclick = function(e) {
         e.stopPropagation();
@@ -961,7 +948,6 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById("scaleInput").onkeydown = function(e) {
         if (e.key === "Enter") adjustFont();
     };
-    // 确保输入框初始不为只读
     const inputEl = document.getElementById("input");
     if (inputEl) {
         inputEl.removeAttribute("readonly");
