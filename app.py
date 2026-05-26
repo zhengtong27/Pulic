@@ -19,7 +19,7 @@ if DASHSCOPE_API_KEY:
 else:
     client = None
 
-MODEL_NAME = "qwen-max"   # 或者 "qwen-plus"
+MODEL_NAME = "qwen-max"
 
 @app.after_request
 def add_headers(response):
