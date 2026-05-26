@@ -4,124 +4,569 @@ import re
 import os
 import json
 import time
-from dashscope import Application
+from openai import OpenAI
 
 app = Flask(__name__)
 
+# ============================================================
+# 环境变量
+# ============================================================
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
-DASHSCOPE_APP_ID = os.environ.get("DASHSCOPE_APP_ID")
-DASHSCOPE_WORKSPACE_ID = os.environ.get("DASHSCOPE_WORKSPACE_ID")
-
 if not DASHSCOPE_API_KEY:
-    print("警告：未设置环境变量 DASHSCOPE_API_KEY")
-if not DASHSCOPE_APP_ID:
-    print("警告：未设置环境变量 DASHSCOPE_APP_ID")
+    print("警告：未设置环境变量 DASHSCOPE_API_KEY，API 调用将失败")
 
-def generate_stream(question):
-    mild = re.compile(
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+if DASHSCOPE_API_KEY:
+    client = OpenAI(api_key=DASHSCOPE_API_KEY, base_url=DASHSCOPE_BASE_URL)
+else:
+    client = None
+    print("错误：无法创建 OpenAI 客户端，请设置环境变量 DASHSCOPE_API_KEY")
+
+MODEL_NAME = "qwen3-32b-27649d93fc36"   # 请根据实际情况修改
+
+# ============================================================
+# 跨域头
+# ============================================================
+@app.after_request
+def add_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
+# ============================================================
+# 非流式调用（保留，兼容旧接口）
+# ============================================================
+def call_llm(question):
+    mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
     )
-    if mild.search(question):
+    if mild_pattern.search(question):
+        return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
+    
+    system_prompt = (
+        "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
+        "【回答风格】\n"
+        "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁，直接给出建议或信息。\n\n"
+        "【重要限制】\n"
+        "1. 对于以下症状，绝对不要提及“脑卒中”、“中风”、“紧急就医”、“拨打120”等词汇，只需给予休息观察建议：\n"
+        "   - 轻微头痛、头晕、眼花、疲劳、乏力、颈部不适、失眠、焦虑、消化不良等\n"
+        "   - 回答示例：\n"
+        "     “头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。如果疼痛持续不缓解或加重，再咨询医生。”\n\n"
+        "2. 只有当用户明确描述以下至少一项脑卒中典型征兆时，才明确建议立即就医：\n"
+        "   - 一侧肢体突然无力或麻木\n"
+        "   - 口角歪斜、说话不清\n"
+        "   - 突发剧烈头痛（“像被雷劈一样”）\n"
+        "   - 单侧视力突然模糊或失明\n"
+        "   - 突然行走不稳、失去平衡\n\n"
+        "3. 对于所有其他健康问题，回答应通俗易懂，引用权威知识，但始终强调“本内容仅供参考，如有不适请及时就医”。\n\n"
+        "4. 绝不提供急救指导、药物剂量或替代医生诊断的建议。\n\n"
+        "5. 如果用户描述的症状不在上述列表中，请先询问是否有其他症状，并建议先休息观察，切勿自行套用脑卒中标准。"
+    )
+    
+    try:
+        stream = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": question}
+            ],
+            extra_body={"enable_thinking": True},
+            temperature=0.3,
+            top_p=0.85,
+            max_tokens=1024,
+            stream=True
+        )
+        
+        full_answer = ""
+        reasoning_parts = []
+        
+        for chunk in stream:
+            if chunk.choices and len(chunk.choices) > 0:
+                delta = chunk.choices[0].delta
+                if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                    reasoning_parts.append(delta.reasoning_content)
+                if hasattr(delta, "content") and delta.content:
+                    full_answer += delta.content
+        
+        if reasoning_parts:
+            print(f"[思考过程] {''.join(reasoning_parts)}")
+        
+        prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
+        cleaned_answer = prefix_pattern.sub('', full_answer).strip()
+        if cleaned_answer:
+            full_answer = cleaned_answer
+        
+        emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
+        if full_answer and any(kw in full_answer for kw in emergency_keywords):
+            if mild_pattern.search(question):
+                return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                        "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
+        
+        return full_answer.strip() if full_answer else "抱歉，模型未返回有效回答。"
+    
+    except Exception as e:
+        print(f"模型调用失败: {e}")
+        return "抱歉，系统繁忙，请稍后再试。"
+
+# ============================================================
+# 流式生成器（用于 SSE）
+# ============================================================
+def generate_stream(question):
+    """流式输出回答片段，实现打字机效果"""
+    mild_pattern = re.compile(
+        r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
+        re.IGNORECASE
+    )
+    if mild_pattern.search(question):
         fixed = ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                  "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
         for i in range(0, len(fixed), 15):
             yield fixed[i:i+15]
             time.sleep(0.03)
         return
+
+    system_prompt = (
+        "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
+        "【回答风格】\n"
+        "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁，直接给出建议或信息。\n\n"
+        "【重要限制】\n"
+        "1. 对于以下症状，绝对不要提及“脑卒中”、“中风”、“紧急就医”、“拨打120”等词汇，只需给予休息观察建议：\n"
+        "   - 轻微头痛、头晕、眼花、疲劳、乏力、颈部不适、失眠、焦虑、消化不良等\n"
+        "   - 回答示例：\n"
+        "     “头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。如果疼痛持续不缓解或加重，再咨询医生。”\n\n"
+        "2. 只有当用户明确描述以下至少一项脑卒中典型征兆时，才明确建议立即就医：\n"
+        "   - 一侧肢体突然无力或麻木\n"
+        "   - 口角歪斜、说话不清\n"
+        "   - 突发剧烈头痛（“像被雷劈一样”）\n"
+        "   - 单侧视力突然模糊或失明\n"
+        "   - 突然行走不稳、失去平衡\n\n"
+        "3. 对于所有其他健康问题，回答应通俗易懂，引用权威知识，但始终强调“本内容仅供参考，如有不适请及时就医”。\n\n"
+        "4. 绝不提供急救指导、药物剂量或替代医生诊断的建议。\n\n"
+        "5. 如果用户描述的症状不在上述列表中，请先询问是否有其他症状，并建议先休息观察，切勿自行套用脑卒中标准。"
+    )
+    
     try:
-        resp = Application.call(
-            app_id=DASHSCOPE_APP_ID,
-            prompt=question,
-            api_key=DASHSCOPE_API_KEY,
-            workspace_id=DASHSCOPE_WORKSPACE_ID,
-            stream=True,
-            timeout=120
+        stream = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": question}
+            ],
+            extra_body={"enable_thinking": True},
+            temperature=0.3,
+            top_p=0.85,
+            max_tokens=1024,
+            stream=True
         )
     except Exception as e:
-        print(e)
+        print(f"流式调用失败: {e}")
         yield "抱歉，系统繁忙，请稍后再试。"
         return
-    last = ""
-    buf = ""
-    for chunk in resp:
-        if chunk.output and chunk.output.text:
-            txt = chunk.output.text
-            if txt == last:
-                continue
-            last = txt
-            buf += txt
-            if len(buf) > 30 or buf.endswith(('。','！','？','\n')):
-                yield buf
-                buf = ""
-    if buf:
-        yield buf
 
-@app.route('/api/stroke_qa_stream', methods=['POST'])
-def stream_api():
-    data = request.get_json() or {}
-    q = data.get("question", "")
-    if not q:
+    last_chunk = ""
+    buffer = ""
+    for chunk in stream:
+        if chunk.choices and len(chunk.choices) > 0:
+            delta = chunk.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                txt = delta.content
+                if txt == last_chunk:
+                    continue
+                last_chunk = txt
+                buffer += txt
+                if len(buffer) > 30 or buffer.endswith(('。', '！', '？', '\n')):
+                    yield buffer
+                    buffer = ""
+    if buffer:
+        yield buffer
+
+# ============================================================
+# 路由
+# ============================================================
+@app.route('/api/switch_lang', methods=['POST', 'OPTIONS'])
+def switch_lang():
+    if request.method == 'OPTIONS':
+        return '', 200
+    return jsonify({"status": "success"})
+
+@app.route('/api/stroke_qa', methods=['POST', 'OPTIONS'])
+def stroke_qa():
+    if request.method == 'OPTIONS':
+        return '', 200
+    data = request.get_json(silent=True) or {}
+    question = data.get("question", "")
+    if not question:
+        return jsonify({"status": "error", "message": "问题不能为空"})
+    answer = call_llm(question)
+    return jsonify({"status": "success", "data": {"answer": answer}})
+
+@app.route('/api/stroke_qa_stream', methods=['POST', 'OPTIONS'])
+def stroke_qa_stream():
+    if request.method == 'OPTIONS':
+        return '', 200
+    data = request.get_json(silent=True) or {}
+    question = data.get("question", "")
+    if not question:
         return jsonify({"error": "问题为空"}), 400
-    def gen():
-        for chunk in generate_stream(q):
+    def event_stream():
+        for chunk in generate_stream(question):
             yield f"data: {json.dumps({'chunk': chunk})}\n\n"
         yield "data: {\"done\": true}\n\n"
-    return Response(gen(), mimetype="text/event-stream")
-
-@app.route('/api/switch_lang', methods=['POST'])
-def switch_lang():
-    return jsonify({"status": "success"})
+    return Response(event_stream(), mimetype="text/event-stream")
 
 @app.route('/')
 def index():
     return render_template_string('''
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
     <title>福医卒中通 · 脑卒中智能诊疗助手</title>
     <style>
-        *{margin:0;padding:0;box-sizing:border-box}
-        :root{--font-scale:1}
-        body{background:linear-gradient(135deg,#f0f7ff,#e6f4fd);padding:20px;padding-bottom:90px}
-        .container{max-width:1000px;margin:0 auto}
-        header{text-align:center;margin-bottom:20px}
-        header h1{font-size:calc(56px * var(--font-scale));color:#0077cc}
-        header p{color:#666;font-size:calc(28px * var(--font-scale))}
-        .main-card{background:#fff;border-radius:16px;box-shadow:0 8px 24px rgba(0,100,200,0.08);display:flex;flex-direction:column;height:calc(100vh - 40px - 90px)}
-        .chat-header-bar{background:linear-gradient(90deg,#0077cc,#0099ee);color:#fff;padding:14px 20px;display:flex;justify-content:space-between}
-        .chat-header-bar h2{font-size:calc(32px * var(--font-scale))}
-        .header-btns{display:flex;gap:8px}
-        .header-btn{padding:6px 12px;border-radius:20px;background:rgba(255,255,255,0.2);color:#fff;border:none;font-size:calc(26px * var(--font-scale));cursor:pointer}
-        .chat-content{display:flex;flex:1;overflow:hidden}
-        .sidebar{width:200px;background:#f8fcff;border-right:1px solid #e6f7ff;padding:20px}
-        .avatar-box{width:100px;height:100px;margin:0 auto 10px;border-radius:50%;background:#fff;border:3px solid #0077cc;display:flex;align-items:center;justify-content:center;animation:breathing 4s infinite}
-        .avatar-box.patient{border-color:#5499c7}
-        .avatar-card{text-align:center;margin-bottom:24px}
-        .avatar-card h3{font-size:calc(28px * var(--font-scale));color:#0077cc}
-        @keyframes breathing{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
-        .chat-main{flex:1;display:flex;flex-direction:column;overflow:hidden}
-        .quick-questions{padding:12px 16px;background:#f5f9fe;border-bottom:1px solid #e6f0fa;overflow-x:auto;white-space:nowrap;display:flex;gap:10px}
-        .quick-questions button{background:#eef3fc;border:1px solid #cce4f5;border-radius:24px;padding:8px 16px;font-size:calc(24px * var(--font-scale));color:#0077cc;cursor:pointer}
-        .chat-body{flex:1;padding:20px;overflow-y:auto;background:#fafbfc}
-        .message{display:flex;gap:10px;margin-bottom:14px;max-width:75%}
-        .message.user{margin-left:auto;flex-direction:row-reverse}
-        .msg-avatar{width:36px;height:36px;border-radius:50%;background:#fff;border:1px solid #eee;display:flex;align-items:center;justify-content:center}
-        .msg-bubble{padding:10px 14px;border-radius:14px;background:#fff;border:1px solid #eee;line-height:1.5;font-size:calc(28px * var(--font-scale))}
-        .message.user .msg-bubble{background:#0077cc;color:#fff;border:none}
-        .chat-footer{position:fixed;bottom:0;left:0;width:100%;padding:14px 20px;border-top:1px solid #eee;display:flex;gap:10px;background:#fff;z-index:99}
-        .chat-input{flex:1;padding:10px 16px;border:1px solid #ddd;border-radius:24px;outline:none;font-size:calc(28px * var(--font-scale))}
-        .send-btn,.clear-btn{padding:10px 18px;border-radius:24px;background:#0077cc;color:#fff;border:none;font-size:calc(28px * var(--font-scale));cursor:pointer}
-        .clear-btn{background:#777}
-        .mic-btn{width:38px;height:38px;border-radius:50%;background:#0077cc;color:#fff;font-size:calc(32px * var(--font-scale));border:none;cursor:pointer}
-        .mic-btn.recording{background:#e53935;animation:pulse 1s infinite}
-        @keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.1)}100%{transform:scale(1)}}
-        .modal-mask{position:fixed;top:0;left:0;width:100%;height:100%;z-index:999;background:rgba(0,0,0,0.5);display:none}
-        .font-modal{position:absolute;top:60px;right:0;background:#fff;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);padding:15px;z-index:1000;display:none;min-width:280px}
-        .font-modal.show{display:block}
-        @media (max-width:768px){.sidebar{display:none}.chat-main{width:100%}}
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        :root {
+            --font-scale: 1;
+        }
+        body {
+            background: linear-gradient(135deg, #f0f7ff 0%, #e6f4fd 100%);
+            padding: 20px;
+            min-height: 100vh;
+            font-size: calc(16px * var(--font-scale));
+            padding-bottom: 90px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        header h1 {
+            font-size: calc(56px * var(--font-scale));
+            color: #0077cc;
+            margin-bottom: 6px;
+        }
+        header p {
+            color: #666;
+            font-size: calc(28px * var(--font-scale));
+        }
+        .main-card {
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0,100,200,0.08);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px - 90px);
+        }
+        .chat-header-bar {
+            background: linear-gradient(90deg, #0077cc, #0099ee);
+            color: #fff;
+            padding: 14px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+        }
+        .chat-header-bar h2 {
+            font-size: calc(32px * var(--font-scale));
+            font-weight: 500;
+        }
+        .header-btns {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .header-btn {
+            padding: 6px 12px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.2);
+            color: #fff;
+            border: none;
+            font-size: calc(26px * var(--font-scale));
+            cursor: pointer;
+            white-space: nowrap;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .font-modal {
+            position: absolute;
+            top: 60px;
+            right: 0;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            padding: 15px;
+            z-index: 100;
+            display: none;
+            min-width: 280px;
+        }
+        .font-modal.show {
+            display: block;
+        }
+        .font-modal .modal-title {
+            color: #0077cc;
+            font-size: calc(24px * var(--font-scale));
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+        .font-modal .opt-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+        .font-modal .opt-btn {
+            flex: 1;
+            padding: 8px 0;
+            border: 1px solid #eee;
+            border-radius: 6px;
+            background: #f8fcff;
+            color: #0077cc;
+            font-size: calc(22px * var(--font-scale));
+            cursor: pointer;
+        }
+        .font-modal .opt-btn.active {
+            background: #0077cc;
+            color: #fff;
+            border-color: #0077cc;
+        }
+        .font-modal .input-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .font-modal input {
+            flex: 1;
+            padding: 8px 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            outline: none;
+            font-size: calc(22px * var(--font-scale));
+        }
+        .font-modal .confirm-btn {
+            width: 100%;
+            padding: 8px 0;
+            border: none;
+            border-radius: 6px;
+            background: #0077cc;
+            color: #fff;
+            font-size: calc(22px * var(--font-scale));
+            cursor: pointer;
+        }
+        .font-modal .tip-text {
+            font-size: calc(20px * var(--font-scale));
+            color: #666;
+            margin-top: 8px;
+            text-align: center;
+        }
+        .chat-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        .sidebar {
+            width: 200px;
+            background: #f8fcff;
+            border-right: 1px solid #e6f7ff;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        .avatar-box {
+            width: 100px;
+            height: 100px;
+            margin: 0 auto 10px;
+            border-radius: 50%;
+            background: #fff;
+            border: 3px solid #0077cc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: breathing 4s infinite ease-in-out;
+        }
+        .avatar-box.patient {
+            border-color: #5499c7;
+        }
+        .avatar-card {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .avatar-card h3 {
+            font-size: calc(28px * var(--font-scale));
+            color: #0077cc;
+        }
+        .patient-text {
+            color: #5499c7 !important;
+        }
+        @keyframes breathing {
+            0%,100%{transform: scale(1);}
+            50%{transform: scale(1.04);}
+        }
+        .chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .quick-questions {
+            padding: 12px 16px;
+            background: #f5f9fe;
+            border-bottom: 1px solid #e6f0fa;
+            overflow-x: auto;
+            white-space: nowrap;
+            display: flex;
+            gap: 10px;
+            scrollbar-width: thin;
+            -webkit-overflow-scrolling: touch;
+        }
+        .quick-questions::-webkit-scrollbar {
+            height: 4px;
+        }
+        .quick-questions button {
+            background: #eef3fc;
+            border: 1px solid #cce4f5;
+            border-radius: 24px;
+            padding: 8px 16px;
+            font-size: calc(24px * var(--font-scale));
+            color: #0077cc;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+            transition: all 0.2s;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .quick-questions button:hover {
+            background: #0077cc;
+            color: #fff;
+            border-color: #0077cc;
+        }
+        .chat-body {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #fafbfc;
+        }
+        .message {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 14px;
+            max-width: 75%;
+        }
+        .message.user {
+            margin-left: auto;
+            flex-direction: row-reverse;
+        }
+        .msg-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #fff;
+            border: 1px solid #eee;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .msg-bubble {
+            padding: 10px 14px;
+            border-radius: 14px;
+            background: #fff;
+            border: 1px solid #eee;
+            line-height: 1.5;
+            font-size: calc(28px * var(--font-scale));
+            word-break: break-word;
+        }
+        .message.user .msg-bubble {
+            background: #0077cc;
+            color: #fff;
+            border: none;
+        }
+        .chat-footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            padding: 14px 20px;
+            border-top: 1px solid #eee;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            background: #fff;
+            z-index: 99;
+            box-shadow: 0 -2px 10px rgba(0,100,200,0.05);
+            padding-bottom: calc(14px + env(safe-area-inset-bottom));
+        }
+        .chat-input {
+            flex: 1;
+            padding: 10px 16px;
+            border: 1px solid #ddd;
+            border-radius: 24px;
+            outline: none;
+            font-size: calc(28px * var(--font-scale));
+            min-width: 0;
+        }
+        .send-btn, .clear-btn {
+            padding: 10px 18px;
+            border-radius: 24px;
+            background: #0077cc;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            font-size: calc(28px * var(--font-scale));
+            white-space: nowrap;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .clear-btn {
+            background: #777;
+        }
+        .mic-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            background: #0077cc;
+            color: #fff;
+            font-size: calc(32px * var(--font-scale));
+            border: none;
+            cursor: pointer;
+            flex-shrink: 0;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .mic-btn.recording {
+            background: #e53935;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%{transform: scale(1);}
+            50%{transform: scale(1.1);}
+            100%{transform: scale(1);}
+        }
+        .modal-mask {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 98;
+            display: none;
+        }
+        .modal-mask.show {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -140,14 +585,14 @@ def index():
                 <div class="font-modal" id="fontModal">
                     <div class="modal-title">字体大小调节</div>
                     <div class="opt-group">
-                        <button class="opt-btn active" id="enlargeBtn">放大</button>
-                        <button class="opt-btn" id="narrowBtn">缩小</button>
+                        <button class="opt-btn active" id="enlargeBtn" onclick="selectOpt('enlarge')">放大</button>
+                        <button class="opt-btn" id="narrowBtn" onclick="selectOpt('narrow')">缩小</button>
                     </div>
                     <div class="input-group">
-                        <input type="number" id="scaleInput" step="0.5" value="">
+                        <input type="number" id="scaleInput" placeholder="请输入调节倍数" min="1" max="4" step="0.5" value="1">
                     </div>
-                    <button class="confirm-btn" id="confirmFontBtn">确认调节</button>
-                    <div class="tip-text">放大1-4 缩小0.3-1</div>
+                    <button class="confirm-btn" onclick="adjustFont()">确认调节</button>
+                    <div class="tip-text">放大：1-4（步长0.5）| 缩小：0.3-1（步长0.1）</div>
                 </div>
             </div>
         </div>
@@ -230,306 +675,318 @@ def index():
     <button class="send-btn" id="sendBtn">发送</button>
     <button class="send-btn clear-btn" id="clearBtn">清空</button>
 </div>
-<div class="modal-mask" id="modalMask"></div>
+<div class="modal-mask" id="modalMask" onclick="closeFontModal()"></div>
 
 <script>
-// 确保所有DOM元素加载完成后初始化
-document.addEventListener('DOMContentLoaded', function() {
-    console.log("DOM fully loaded");
+let lang = "zh";
+let voiceEnabled = true;
+let fontOpt = "enlarge";
+const synth = window.speechSynthesis;
+let recognition = null;
+let isRecording = false;
 
-    // ========== 全局变量 ==========
-    window.lang = "zh";
-    window.voiceEnabled = true;
-    window.fontOpt = "enlarge";
-    window.isRecording = false;
-    window.activeRecognition = null;
-    window.mediaStream = null;
-    window.synth = window.speechSynthesis;
+const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
+    <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
+    <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
+    <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
+    <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+    <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+    <rect x="8" y="28" width="28" height="12" rx="2" fill="#fff" stroke="#0077cc" stroke-width="1"/>
+</svg>`;
+const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
+    <circle cx="22" cy="22" r="20" fill="#f0f9ff" stroke="#5499c7" stroke-width="1"/>
+    <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
+    <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
+    <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+    <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+    <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
+</svg>`;
 
-    // 头像 SVG
-    const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
-        <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
-        <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
-        <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
-        <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-        <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-        <rect x="8" y="28" width="28" height="12" rx="2" fill="#fff" stroke="#0077cc" stroke-width="1"/>
-    </svg>`;
-    const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
-        <circle cx="22" cy="22" r="20" fill="#f0f9ff" stroke="#5499c7" stroke-width="1"/>
-        <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
-        <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
-        <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-        <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-        <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
-    </svg>`;
+var inputElement = document.getElementById("input");
+if (inputElement) {
+    inputElement.removeAttribute("readonly");
+    inputElement.removeAttribute("disabled");
+}
 
-    // 获取DOM元素
-    const inputEl = document.getElementById('input');
-    const chatBody = document.getElementById('chatBody');
-    const fontBtn = document.getElementById('fontBtn');
-    const confirmFontBtn = document.getElementById('confirmFontBtn');
-    const enlargeBtn = document.getElementById('enlargeBtn');
-    const narrowBtn = document.getElementById('narrowBtn');
-    const langBtn = document.getElementById('langBtn');
-    const voiceBtn = document.getElementById('voiceBtn');
-    const micBtn = document.getElementById('micBtn');
-    const sendBtn = document.getElementById('sendBtn');
-    const clearBtn = document.getElementById('clearBtn');
-    const modalMask = document.getElementById('modalMask');
-    const fontModal = document.getElementById('fontModal');
+function selectOpt(opt) {
+    fontOpt = opt;
+    document.getElementById('enlargeBtn').className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
+    document.getElementById('narrowBtn').className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
     const scaleInput = document.getElementById('scaleInput');
+    if (opt === 'enlarge') {
+        scaleInput.min = 1;
+        scaleInput.max = 4;
+        scaleInput.step = 0.5;
+        scaleInput.value = 1;
+        scaleInput.placeholder = "放大倍数（1-4）";
+    } else {
+        scaleInput.min = 0.3;
+        scaleInput.max = 1;
+        scaleInput.step = 0.1;
+        scaleInput.value = 1;
+        scaleInput.placeholder = "缩小倍数（0.3-1）";
+    }
+    scaleInput.focus();
+}
 
-    if (inputEl) {
-        inputEl.removeAttribute('readonly');
-        inputEl.removeAttribute('disabled');
+function adjustFont() {
+    const scaleInput = document.getElementById('scaleInput');
+    const inputVal = scaleInput.value.trim();
+    if (!inputVal || isNaN(inputVal) || Number(inputVal) <= 0) {
+        alert("请输入有效的正数倍数！");
+        scaleInput.focus();
+        return;
     }
+    const scale = Number(inputVal);
+    document.documentElement.style.setProperty('--font-scale', scale);
+    closeFontModal();
+    scaleInput.value = '';
+}
 
-    // ========== 字体调节 ==========
-    function selectOpt(opt) {
-        window.fontOpt = opt;
-        if (enlargeBtn) enlargeBtn.className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
-        if (narrowBtn) narrowBtn.className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
-        if (scaleInput) {
-            if (opt === 'enlarge') {
-                scaleInput.min = 1;
-                scaleInput.max = 4;
-                scaleInput.step = 0.5;
-                scaleInput.placeholder = "1-4";
-            } else {
-                scaleInput.min = 0.3;
-                scaleInput.max = 1;
-                scaleInput.step = 0.1;
-                scaleInput.placeholder = "0.3-1";
-            }
-            scaleInput.value = "";
-            scaleInput.focus();
-        }
-    }
+function openFontModal() {
+    document.getElementById('fontModal').classList.add('show');
+    document.getElementById('modalMask').classList.add('show');
+    document.getElementById('scaleInput').focus();
+}
 
-    function adjustFont() {
-        if (!scaleInput) return;
-        let v = parseFloat(scaleInput.value.trim());
-        if (isNaN(v) || v <= 0) v = 1;
-        if (window.fontOpt === 'enlarge') {
-            v = Math.min(4, Math.max(1, v));
-        } else {
-            v = Math.min(1, Math.max(0.3, v));
-        }
-        document.documentElement.style.setProperty('--font-scale', v);
-        scaleInput.value = v;
-        closeFontModal();
-    }
+function closeFontModal() {
+    document.getElementById('fontModal').classList.remove('show');
+    document.getElementById('modalMask').classList.remove('show');
+    selectOpt('enlarge');
+    document.getElementById('scaleInput').value = '1';
+}
 
-    function openFontModal() {
-        if (fontModal) fontModal.classList.add('show');
-        if (modalMask) modalMask.classList.add('show');
-        if (scaleInput) scaleInput.focus();
+function initRecognition() {
+    if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+        alert("当前浏览器不支持语音输入，请使用 Chrome 或 Edge 最新版。");
+        return false;
     }
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new Rec();
+    recognition.lang = lang === "zh" ? "zh-CN" : "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.onresult = (e) => {
+        const txt = e.results[0][0].transcript;
+        document.getElementById("input").value = txt;
+        stopRec();
+    };
+    recognition.onerror = stopRec;
+    recognition.onend = stopRec;
+    return true;
+}
 
-    function closeFontModal() {
-        if (fontModal) fontModal.classList.remove('show');
-        if (modalMask) modalMask.classList.remove('show');
-        selectOpt('enlarge');
-        if (scaleInput) scaleInput.value = '';
+function toggleRec() {
+    if (!recognition) {
+        if (!initRecognition()) return;
     }
+    isRecording = !isRecording;
+    const btn = document.getElementById("micBtn");
+    btn.classList.toggle("recording");
+    if (isRecording) {
+        recognition.start();
+    } else {
+        recognition.stop();
+    }
+}
 
-    if (fontBtn) fontBtn.onclick = openFontModal;
-    if (confirmFontBtn) confirmFontBtn.onclick = adjustFont;
-    if (enlargeBtn) enlargeBtn.onclick = () => selectOpt('enlarge');
-    if (narrowBtn) narrowBtn.onclick = () => selectOpt('narrow');
+function stopRec() {
+    isRecording = false;
+    document.getElementById("micBtn").classList.remove("recording");
+    if (recognition) recognition.stop();
+}
 
-    // ========== 语音播报 ==========
-    function toggleVoice() {
-        window.voiceEnabled = !window.voiceEnabled;
-        if (voiceBtn) voiceBtn.innerText = "语音播报：" + (window.voiceEnabled ? "开" : "关");
-        if (!window.voiceEnabled) {
-            if (window.synth) window.synth.cancel();
-        } else {
-            let lastMsg = getLastAssistantMessage();
-            if (lastMsg) speak(lastMsg);
-        }
+function toggleVoice() {
+    voiceEnabled = !voiceEnabled;
+    document.getElementById("voiceBtn").innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
+    if (!voiceEnabled) {
+        synth.cancel();
+    } else {
+        const lastMsg = getLastAssistantMessage();
+        if (lastMsg) speak(lastMsg);
     }
-    function getLastAssistantMessage() {
-        let msgs = document.querySelectorAll('.message.assistant .msg-bubble');
-        if (msgs.length) return msgs[msgs.length-1].innerText.trim();
-        return null;
-    }
-    function speak(t) {
-        if (!window.voiceEnabled || !t) return;
-        if (window.synth) window.synth.cancel();
-        let u = new SpeechSynthesisUtterance(t);
-        u.lang = window.lang === 'zh' ? 'zh-CN' : 'en-US';
-        window.synth.speak(u);
-    }
-    if (voiceBtn) voiceBtn.onclick = toggleVoice;
+}
 
-    // ========== 中英文切换 ==========
-    async function switchLang() {
-        window.lang = window.lang === 'zh' ? 'en' : 'zh';
-        try {
-            await fetch('/api/switch_lang', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({lang: window.lang})
-            });
-        } catch(e) { console.log(e); }
-        if (langBtn) langBtn.innerText = window.lang === 'zh' ? '切换英文' : '切换中文';
-        clearChat();
-    }
-    if (langBtn) langBtn.onclick = switchLang;
+function getLastAssistantMessage() {
+    const messages = document.querySelectorAll('.message.assistant .msg-bubble');
+    if (messages.length === 0) return null;
+    const lastBubble = messages[messages.length - 1];
+    let text = lastBubble.innerText || lastBubble.textContent;
+    return text.trim();
+}
 
-    // ========== 语音输入 ==========
-    async function ensureMic() {
-        if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-            alert("不支持语音识别");
-            return false;
-        }
-        if (window.mediaStream && window.mediaStream.active) return true;
-        try {
-            const s = await navigator.mediaDevices.getUserMedia({audio: true});
-            window.mediaStream = s;
-            return true;
-        } catch(e) {
-            alert("请允许麦克风权限");
-            return false;
-        }
-    }
-    function startRecog() {
-        if (window.activeRecognition) window.activeRecognition.abort();
-        const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!Rec) return;
-        const rec = new Rec();
-        rec.lang = window.lang === 'zh' ? 'zh-CN' : 'en-US';
-        rec.interimResults = false;
-        rec.maxAlternatives = 1;
-        rec.onstart = () => {
-            window.isRecording = true;
-            if (micBtn) micBtn.classList.add('recording');
-        };
-        rec.onresult = (e) => {
-            if (inputEl) inputEl.value = e.results[0][0].transcript;
-            rec.stop();
-        };
-        rec.onerror = () => stopRec();
-        rec.onend = () => stopRec();
-        try {
-            rec.start();
-            window.activeRecognition = rec;
-        } catch(e) {
-            alert("启动失败");
-            stopRec();
-        }
-    }
-    async function toggleRec() {
-        if (window.isRecording) {
-            stopRec();
-            return;
-        }
-        if (await ensureMic()) startRecog();
-    }
-    function stopRec() {
-        if (window.activeRecognition) window.activeRecognition.abort();
-        window.activeRecognition = null;
-        window.isRecording = false;
-        if (micBtn) micBtn.classList.remove('recording');
-    }
-    window.addEventListener('beforeunload', () => {
-        if (window.mediaStream) window.mediaStream.getTracks().forEach(t => t.stop());
-        if (window.synth) window.synth.cancel();
-    });
-    if (micBtn) micBtn.onclick = toggleRec;
+function speak(text) {
+    if (!voiceEnabled) return;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang === "zh" ? "zh-CN" : "en-US";
+    synth.speak(u);
+}
 
-    // ========== 发送消息 ==========
-    function addMsg(role, text) {
-        if (!chatBody) return;
-        let div = document.createElement('div');
-        div.className = 'message ' + role;
-        let avatar = role === 'user' ? patientAvatar : doctorAvatar;
-        let clean = text.replace(/\*\*/g, '');
-        div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${clean.replace(/\n/g, '<br>')}</div>`;
-        chatBody.appendChild(div);
-        chatBody.scrollTop = chatBody.scrollHeight;
-    }
-    function clearChat() {
-        if (chatBody) {
-            chatBody.innerHTML = `<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${window.lang === 'zh' ? '你好！我是脑卒中智能助手~' : 'Hello! I\'m stroke assistant~'}</div></div>`;
-        }
-    }
-    async function send() {
-        if (!inputEl) return;
-        let text = inputEl.value.trim();
-        if (!text) return;
-        addMsg('user', text);
-        inputEl.value = '';
-        let loading = document.createElement('div');
-        loading.className = 'message assistant loading-message';
-        loading.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
-        if (chatBody) chatBody.appendChild(loading);
-        if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
-        try {
-            let resp = await fetch('/api/stroke_qa_stream', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({question: text})
-            });
-            if (loading) loading.remove();
-            let assistantDiv = document.createElement('div');
-            assistantDiv.className = 'message assistant';
-            assistantDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
-            if (chatBody) chatBody.appendChild(assistantDiv);
-            let bubble = assistantDiv.querySelector('.msg-bubble');
-            let full = '';
-            let reader = resp.body.getReader();
-            let decoder = new TextDecoder();
-            let buffer = '';
-            while (true) {
-                let {done, value} = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, {stream: true});
-                let lines = buffer.split('\n\n');
-                buffer = lines.pop();
-                for (let line of lines) {
-                    if (line.startsWith('data: ')) {
-                        let jsonStr = line.slice(6);
-                        try {
-                            let data = JSON.parse(jsonStr);
-                            if (data.chunk) {
-                                full += data.chunk;
-                                if (bubble) bubble.innerHTML = full.replace(/\n/g, '<br>');
-                                if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
-                            }
-                        } catch(e) {}
-                    }
+// 流式发送消息
+async function send() {
+    const text = document.getElementById("input").value.trim();
+    if (!text) return;
+    addMsg("user", text);
+    document.getElementById("input").value = "";
+    
+    const loadingDiv = document.createElement("div");
+    loadingDiv.className = "message assistant loading-message";
+    loadingDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
+    const chatBody = document.getElementById("chatBody");
+    chatBody.appendChild(loadingDiv);
+    chatBody.scrollTop = chatBody.scrollHeight;
+    
+    try {
+        const res = await fetch("/api/stroke_qa_stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question: text })
+        });
+        loadingDiv.remove();
+        
+        const assistantDiv = document.createElement("div");
+        assistantDiv.className = "message assistant";
+        assistantDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
+        chatBody.appendChild(assistantDiv);
+        const bubble = assistantDiv.querySelector(".msg-bubble");
+        let full = "";
+        
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n\n");
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                    const jsonStr = line.slice(6);
+                    try {
+                        const data = JSON.parse(jsonStr);
+                        if (data.chunk) {
+                            full += data.chunk;
+                            bubble.innerHTML = full.replace(/\\n/g, '<br>');
+                            chatBody.scrollTop = chatBody.scrollHeight;
+                        }
+                    } catch (e) {}
                 }
             }
-            if (window.voiceEnabled && full) speak(full);
-        } catch(e) {
-            if (loading) loading.remove();
-            addMsg('assistant', '抱歉，网络错误，请稍后再试。');
-            console.error(e);
+        }
+        if (voiceEnabled && full) speak(full);
+    } catch (err) {
+        loadingDiv.remove();
+        addMsg("assistant", "抱歉，网络错误，请稍后再试。");
+        console.error(err);
+    }
+}
+
+function addMsg(role, text) {
+    const body = document.getElementById("chatBody");
+    const div = document.createElement("div");
+    div.className = "message " + role;
+    let avatar = role === "user" ? patientAvatar : doctorAvatar;
+    let cleanedText = text.replace(/\\*\\*/g, '');
+    div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleanedText.replace(/\\n/g, '<br>')}</div>`;
+    body.appendChild(div);
+    body.scrollTop = body.scrollHeight;
+}
+
+async function switchLang() {
+    lang = lang === "zh" ? "en" : "zh";
+    await fetch("/api/switch_lang", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang })
+    });
+    document.getElementById("langBtn").innerText = lang === "zh" ? "切换英文" : "切换中文";
+    clearChat();
+}
+
+function clearChat() {
+    const body = document.getElementById("chatBody");
+    body.innerHTML = `<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang === "zh" ? "你好！我是脑卒中智能助手~" : "Hello! I'm stroke assistant~"}</div></div>`;
+}
+
+function quickAsk(question) {
+    const input = document.getElementById("input");
+    input.value = question;
+    send();
+}
+
+// ========== 移动端适配（仅调整布局，不覆盖字体大小） ==========
+(function() {
+    if (window.innerWidth <= 768) {
+        function applyMobileStyles() {
+            var sidebar = document.querySelector('.sidebar');
+            var chatMain = document.querySelector('.chat-main');
+            var chatContent = document.querySelector('.chat-content');
+            
+            if (sidebar) sidebar.style.display = 'none';
+            if (chatMain) {
+                chatMain.style.width = '100%';
+                chatMain.style.flex = '1';
+            }
+            if (chatContent) {
+                chatContent.style.display = 'flex';
+                chatContent.style.flexDirection = 'row';
+            }
+            
+            var style = document.createElement('style');
+            style.type = 'text/css';
+            style.innerHTML = `
+                body header { margin-bottom: 8px !important; }
+                body header h1 { font-size: 24px !important; margin-bottom: 2px !important; }
+                body header p { font-size: 12px !important; display: none !important; }
+                body .chat-header-bar { padding: 8px 12px !important; }
+                body .chat-header-bar h2 { font-size: 18px !important; }
+                body .header-btn { font-size: 12px !important; padding: 4px 8px !important; }
+                body .chat-body { padding: 12px !important; }
+                body .msg-bubble { font-size: 14px !important; padding: 8px 12px !important; }
+                body .quick-questions button { font-size: 13px !important; padding: 6px 12px !important; }
+                body .chat-footer { padding: 8px 12px !important; }
+                body .chat-input { font-size: 14px !important; padding: 8px 12px !important; }
+                body .send-btn, body .clear-btn { font-size: 14px !important; padding: 6px 12px !important; }
+                body .mic-btn { width: 32px !important; height: 32px !important; font-size: 16px !important; }
+                body .message { max-width: 90% !important; }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', applyMobileStyles);
+        } else {
+            applyMobileStyles();
         }
     }
-    if (sendBtn) sendBtn.onclick = send;
-    if (clearBtn) clearBtn.onclick = clearChat;
-    if (inputEl) {
-        inputEl.onkeydown = (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                send();
-            }
-        };
-    }
-    if (modalMask) modalMask.onclick = closeFontModal;
-    if (fontModal) fontModal.onclick = (e) => e.stopPropagation();
-    if (scaleInput) scaleInput.onkeydown = (e) => { if (e.key === 'Enter') adjustFont(); };
+})();
+// ====================================
 
-    window.quickAsk = function(q) {
-        if (inputEl) inputEl.value = q;
-        send();
+// 将所有事件绑定放在 DOMContentLoaded 中，确保元素存在
+document.addEventListener('DOMContentLoaded', function() {
+    console.log("DOM fully loaded, binding events...");
+    document.getElementById("sendBtn").onclick = send;
+    document.getElementById("clearBtn").onclick = clearChat;
+    document.getElementById("langBtn").onclick = switchLang;
+    document.getElementById("micBtn").onclick = toggleRec;
+    document.getElementById("voiceBtn").onclick = toggleVoice;
+    document.getElementById("fontBtn").onclick = openFontModal;
+    document.getElementById("input").onkeydown = function(e) {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            send();
+        }
     };
-
-    console.log("All event listeners attached");
+    document.getElementById("fontModal").onclick = e => e.stopPropagation();
+    document.getElementById("scaleInput").onkeydown = e => e.key === "Enter" && adjustFont();
+    // 确保字体调节确认按钮绑定（因为 onclick 属性已经存在，但以防万一）
+    const confirmBtn = document.querySelector('.confirm-btn');
+    if (confirmBtn && !confirmBtn.hasAttribute('data-bound')) {
+        confirmBtn.setAttribute('data-bound', 'true');
+        confirmBtn.onclick = adjustFont;
+    }
 });
 </script>
 </body>
