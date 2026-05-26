@@ -21,7 +21,7 @@ else:
     client = None
     print("错误：无法创建 OpenAI 客户端")
 
-MODEL_NAME = "qwen-max"   # 使用公开模型
+MODEL_NAME = "qwen3-32b-351ed038aecc"   # 使用公开模型
 
 @app.after_request
 def add_headers(response):
