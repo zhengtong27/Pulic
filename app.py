@@ -1,16 +1,12 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, request, jsonify, render_template_string, Response
+from flask import Flask, request, jsonify, render_template_string
 import re
 import os
-import json
-import time
 from openai import OpenAI
 
 app = Flask(__name__)
 
-# ============================================================
-# 环境变量
-# ============================================================
+# 获取 API Key
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
 if not DASHSCOPE_API_KEY:
     print("警告：未设置环境变量 DASHSCOPE_API_KEY，API 调用将失败")
@@ -23,11 +19,8 @@ else:
     client = None
     print("错误：无法创建 OpenAI 客户端，请设置环境变量 DASHSCOPE_API_KEY")
 
-MODEL_NAME = "qwen3-32b_eb56be00"   # 请根据实际情况修改
+MODEL_NAME = "qwen3-32b-27649d93fc36"   # 请根据实际情况修改
 
-# ============================================================
-# 跨域头
-# ============================================================
 @app.after_request
 def add_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -36,9 +29,6 @@ def add_headers(response):
     response.headers['Cache-Control'] = 'no-cache'
     return response
 
-# ============================================================
-# 非流式调用（保留，兼容旧接口）
-# ============================================================
 def call_llm(question):
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
@@ -113,81 +103,6 @@ def call_llm(question):
         print(f"模型调用失败: {e}")
         return "抱歉，系统繁忙，请稍后再试。"
 
-# ============================================================
-# 流式生成器（用于 SSE）
-# ============================================================
-def generate_stream(question):
-    """流式输出回答片段，实现打字机效果"""
-    mild_pattern = re.compile(
-        r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
-        re.IGNORECASE
-    )
-    if mild_pattern.search(question):
-        fixed = ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
-                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-        for i in range(0, len(fixed), 15):
-            yield fixed[i:i+15]
-            time.sleep(0.03)
-        return
-
-    system_prompt = (
-        "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
-        "【回答风格】\n"
-        "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁，直接给出建议或信息。\n\n"
-        "【重要限制】\n"
-        "1. 对于以下症状，绝对不要提及“脑卒中”、“中风”、“紧急就医”、“拨打120”等词汇，只需给予休息观察建议：\n"
-        "   - 轻微头痛、头晕、眼花、疲劳、乏力、颈部不适、失眠、焦虑、消化不良等\n"
-        "   - 回答示例：\n"
-        "     “头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。如果疼痛持续不缓解或加重，再咨询医生。”\n\n"
-        "2. 只有当用户明确描述以下至少一项脑卒中典型征兆时，才明确建议立即就医：\n"
-        "   - 一侧肢体突然无力或麻木\n"
-        "   - 口角歪斜、说话不清\n"
-        "   - 突发剧烈头痛（“像被雷劈一样”）\n"
-        "   - 单侧视力突然模糊或失明\n"
-        "   - 突然行走不稳、失去平衡\n\n"
-        "3. 对于所有其他健康问题，回答应通俗易懂，引用权威知识，但始终强调“本内容仅供参考，如有不适请及时就医”。\n\n"
-        "4. 绝不提供急救指导、药物剂量或替代医生诊断的建议。\n\n"
-        "5. 如果用户描述的症状不在上述列表中，请先询问是否有其他症状，并建议先休息观察，切勿自行套用脑卒中标准。"
-    )
-    
-    try:
-        stream = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question}
-            ],
-            extra_body={"enable_thinking": True},
-            temperature=0.3,
-            top_p=0.85,
-            max_tokens=1024,
-            stream=True
-        )
-    except Exception as e:
-        print(f"流式调用失败: {e}")
-        yield "抱歉，系统繁忙，请稍后再试。"
-        return
-
-    last_chunk = ""
-    buffer = ""
-    for chunk in stream:
-        if chunk.choices and len(chunk.choices) > 0:
-            delta = chunk.choices[0].delta
-            if hasattr(delta, "content") and delta.content:
-                txt = delta.content
-                if txt == last_chunk:
-                    continue
-                last_chunk = txt
-                buffer += txt
-                if len(buffer) > 30 or buffer.endswith(('。', '！', '？', '\n')):
-                    yield buffer
-                    buffer = ""
-    if buffer:
-        yield buffer
-
-# ============================================================
-# 路由
-# ============================================================
 @app.route('/api/switch_lang', methods=['POST', 'OPTIONS'])
 def switch_lang():
     if request.method == 'OPTIONS':
@@ -204,20 +119,6 @@ def stroke_qa():
         return jsonify({"status": "error", "message": "问题不能为空"})
     answer = call_llm(question)
     return jsonify({"status": "success", "data": {"answer": answer}})
-
-@app.route('/api/stroke_qa_stream', methods=['POST', 'OPTIONS'])
-def stroke_qa_stream():
-    if request.method == 'OPTIONS':
-        return '', 200
-    data = request.get_json(silent=True) or {}
-    question = data.get("question", "")
-    if not question:
-        return jsonify({"error": "问题为空"}), 400
-    def event_stream():
-        for chunk in generate_stream(question):
-            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-        yield "data: {\"done\": true}\n\n"
-    return Response(event_stream(), mimetype="text/event-stream")
 
 @app.route('/')
 def index():
@@ -585,13 +486,13 @@ def index():
                 <div class="font-modal" id="fontModal">
                     <div class="modal-title">字体大小调节</div>
                     <div class="opt-group">
-                        <button class="opt-btn active" id="enlargeBtn" onclick="selectOpt('enlarge')">放大</button>
-                        <button class="opt-btn" id="narrowBtn" onclick="selectOpt('narrow')">缩小</button>
+                        <button class="opt-btn" id="enlargeBtn">放大</button>
+                        <button class="opt-btn" id="narrowBtn">缩小</button>
                     </div>
                     <div class="input-group">
                         <input type="number" id="scaleInput" placeholder="请输入调节倍数" min="1" max="4" step="0.5" value="1">
                     </div>
-                    <button class="confirm-btn" onclick="adjustFont()">确认调节</button>
+                    <button class="confirm-btn" id="confirmFontBtn">确认调节</button>
                     <div class="tip-text">放大：1-4（步长0.5）| 缩小：0.3-1（步长0.1）</div>
                 </div>
             </div>
@@ -639,16 +540,16 @@ def index():
             </div>
             <div class="chat-main">
                 <div class="quick-questions">
-                    <button onclick="quickAsk('高血压怎么预防中风？')">高血压怎么预防中风？</button>
-                    <button onclick="quickAsk('中风后吃什么好？')">中风后吃什么好？</button>
-                    <button onclick="quickAsk('家人中风后怎么照顾？')">家人中风后怎么照顾？</button>
-                    <button onclick="quickAsk('怎么判断是不是中风？')">怎么判断是不是中风？</button>
-                    <button onclick="quickAsk('中风后手脚没力气怎么办？')">中风后手脚没力气怎么办？</button>
-                    <button onclick="quickAsk('中风后情绪低落怎么办？')">中风后情绪低落怎么办？</button>
-                    <button onclick="quickAsk('中风康复训练有哪些？')">中风康复训练有哪些？</button>
-                    <button onclick="quickAsk('颈动脉斑块需要治疗吗？')">颈动脉斑块需要治疗吗？</button>
-                    <button onclick="quickAsk('中风后可以运动吗？')">中风后可以运动吗？</button>
-                    <button onclick="quickAsk('怎么帮家人做心理疏导？')">怎么帮家人做心理疏导？</button>
+                    <button id="quick1">高血压怎么预防中风？</button>
+                    <button id="quick2">中风后吃什么好？</button>
+                    <button id="quick3">家人中风后怎么照顾？</button>
+                    <button id="quick4">怎么判断是不是中风？</button>
+                    <button id="quick5">中风后手脚没力气怎么办？</button>
+                    <button id="quick6">中风后情绪低落怎么办？</button>
+                    <button id="quick7">中风康复训练有哪些？</button>
+                    <button id="quick8">颈动脉斑块需要治疗吗？</button>
+                    <button id="quick9">中风后可以运动吗？</button>
+                    <button id="quick10">怎么帮家人做心理疏导？</button>
                 </div>
                 <div class="chat-body" id="chatBody">
                     <div class="message">
@@ -675,9 +576,10 @@ def index():
     <button class="send-btn" id="sendBtn">发送</button>
     <button class="send-btn clear-btn" id="clearBtn">清空</button>
 </div>
-<div class="modal-mask" id="modalMask" onclick="closeFontModal()"></div>
+<div class="modal-mask" id="modalMask"></div>
 
 <script>
+// 全局变量
 let lang = "zh";
 let voiceEnabled = true;
 let fontOpt = "enlarge";
@@ -685,6 +587,7 @@ const synth = window.speechSynthesis;
 let recognition = null;
 let isRecording = false;
 
+// SVG头像（完整）
 const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
     <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
@@ -702,60 +605,66 @@ const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
 </svg>`;
 
-var inputElement = document.getElementById("input");
-if (inputElement) {
-    inputElement.removeAttribute("readonly");
-    inputElement.removeAttribute("disabled");
-}
+// 获取DOM元素
+function getEl(id) { return document.getElementById(id); }
+function qs(sel) { return document.querySelector(sel); }
 
+// 字体调节
 function selectOpt(opt) {
     fontOpt = opt;
-    document.getElementById('enlargeBtn').className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
-    document.getElementById('narrowBtn').className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
-    const scaleInput = document.getElementById('scaleInput');
-    if (opt === 'enlarge') {
-        scaleInput.min = 1;
-        scaleInput.max = 4;
-        scaleInput.step = 0.5;
+    const enlargeBtn = getEl('enlargeBtn');
+    const narrowBtn = getEl('narrowBtn');
+    if (enlargeBtn) enlargeBtn.className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
+    if (narrowBtn) narrowBtn.className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
+    const scaleInput = getEl('scaleInput');
+    if (scaleInput) {
+        if (opt === 'enlarge') {
+            scaleInput.min = 1;
+            scaleInput.max = 4;
+            scaleInput.step = 0.5;
+            scaleInput.placeholder = "放大倍数（1-4）";
+        } else {
+            scaleInput.min = 0.3;
+            scaleInput.max = 1;
+            scaleInput.step = 0.1;
+            scaleInput.placeholder = "缩小倍数（0.3-1）";
+        }
         scaleInput.value = 1;
-        scaleInput.placeholder = "放大倍数（1-4）";
-    } else {
-        scaleInput.min = 0.3;
-        scaleInput.max = 1;
-        scaleInput.step = 0.1;
-        scaleInput.value = 1;
-        scaleInput.placeholder = "缩小倍数（0.3-1）";
+        scaleInput.focus();
     }
-    scaleInput.focus();
 }
-
 function adjustFont() {
-    const scaleInput = document.getElementById('scaleInput');
+    const scaleInput = getEl('scaleInput');
+    if (!scaleInput) return;
     const inputVal = scaleInput.value.trim();
     if (!inputVal || isNaN(inputVal) || Number(inputVal) <= 0) {
         alert("请输入有效的正数倍数！");
         scaleInput.focus();
         return;
     }
-    const scale = Number(inputVal);
+    let scale = Number(inputVal);
+    if (fontOpt === 'enlarge') scale = Math.min(4, Math.max(1, scale));
+    else scale = Math.min(1, Math.max(0.3, scale));
     document.documentElement.style.setProperty('--font-scale', scale);
     closeFontModal();
-    scaleInput.value = '';
 }
-
 function openFontModal() {
-    document.getElementById('fontModal').classList.add('show');
-    document.getElementById('modalMask').classList.add('show');
-    document.getElementById('scaleInput').focus();
+    const modal = getEl('fontModal');
+    const mask = getEl('modalMask');
+    if (modal) modal.classList.add('show');
+    if (mask) mask.classList.add('show');
+    const scaleInput = getEl('scaleInput');
+    if (scaleInput) scaleInput.focus();
 }
-
 function closeFontModal() {
-    document.getElementById('fontModal').classList.remove('show');
-    document.getElementById('modalMask').classList.remove('show');
+    const modal = getEl('fontModal');
+    const mask = getEl('modalMask');
+    if (modal) modal.classList.remove('show');
+    if (mask) mask.classList.remove('show');
     selectOpt('enlarge');
-    document.getElementById('scaleInput').value = '1';
 }
 
+// 语音识别
 function initRecognition() {
     if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
         alert("当前浏览器不支持语音输入，请使用 Chrome 或 Edge 最新版。");
@@ -768,37 +677,39 @@ function initRecognition() {
     recognition.continuous = false;
     recognition.onresult = (e) => {
         const txt = e.results[0][0].transcript;
-        document.getElementById("input").value = txt;
+        const inputEl = getEl('input');
+        if (inputEl) inputEl.value = txt;
         stopRec();
     };
     recognition.onerror = stopRec;
     recognition.onend = stopRec;
     return true;
 }
-
 function toggleRec() {
     if (!recognition) {
         if (!initRecognition()) return;
     }
     isRecording = !isRecording;
-    const btn = document.getElementById("micBtn");
-    btn.classList.toggle("recording");
+    const micBtn = getEl('micBtn');
+    if (micBtn) micBtn.classList.toggle('recording');
     if (isRecording) {
-        recognition.start();
+        try { recognition.start(); } catch(e) { stopRec(); alert("麦克风启动失败"); }
     } else {
         recognition.stop();
     }
 }
-
 function stopRec() {
     isRecording = false;
-    document.getElementById("micBtn").classList.remove("recording");
+    const micBtn = getEl('micBtn');
+    if (micBtn) micBtn.classList.remove('recording');
     if (recognition) recognition.stop();
 }
 
+// 语音播报
 function toggleVoice() {
     voiceEnabled = !voiceEnabled;
-    document.getElementById("voiceBtn").innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
+    const voiceBtn = getEl('voiceBtn');
+    if (voiceBtn) voiceBtn.innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
     if (!voiceEnabled) {
         synth.cancel();
     } else {
@@ -806,124 +717,100 @@ function toggleVoice() {
         if (lastMsg) speak(lastMsg);
     }
 }
-
 function getLastAssistantMessage() {
     const messages = document.querySelectorAll('.message.assistant .msg-bubble');
     if (messages.length === 0) return null;
-    const lastBubble = messages[messages.length - 1];
-    let text = lastBubble.innerText || lastBubble.textContent;
-    return text.trim();
+    return messages[messages.length-1].innerText.trim();
 }
-
 function speak(text) {
-    if (!voiceEnabled) return;
+    if (!voiceEnabled || !text) return;
     synth.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = lang === "zh" ? "zh-CN" : "en-US";
     synth.speak(u);
 }
 
-// 流式发送消息
+// 中英文切换
+async function switchLang() {
+    lang = lang === "zh" ? "en" : "zh";
+    try {
+        await fetch("/api/switch_lang", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lang })
+        });
+    } catch(e) { console.error(e); }
+    const langBtn = getEl('langBtn');
+    if (langBtn) langBtn.innerText = lang === "zh" ? "切换英文" : "切换中文";
+    clearChat();
+}
+
+// 消息显示
+function addMsg(role, text) {
+    const body = getEl('chatBody');
+    if (!body) return;
+    const div = document.createElement('div');
+    div.className = 'message ' + role;
+    const avatar = role === 'user' ? patientAvatar : doctorAvatar;
+    let cleaned = text.replace(/\*\*/g, '');
+    div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleaned.replace(/\n/g, '<br>')}</div>`;
+    body.appendChild(div);
+    body.scrollTop = body.scrollHeight;
+}
+function clearChat() {
+    const body = getEl('chatBody');
+    if (body) {
+        body.innerHTML = `<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang === "zh" ? "你好！我是脑卒中智能助手~" : "Hello! I'm stroke assistant~"}</div></div>`;
+    }
+}
+
+// 发送消息（调用非流式接口）
 async function send() {
-    const text = document.getElementById("input").value.trim();
+    const inputEl = getEl('input');
+    if (!inputEl) return;
+    const text = inputEl.value.trim();
     if (!text) return;
-    addMsg("user", text);
-    document.getElementById("input").value = "";
+    addMsg('user', text);
+    inputEl.value = '';
     
-    const loadingDiv = document.createElement("div");
-    loadingDiv.className = "message assistant loading-message";
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'message assistant loading-message';
     loadingDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
-    const chatBody = document.getElementById("chatBody");
-    chatBody.appendChild(loadingDiv);
-    chatBody.scrollTop = chatBody.scrollHeight;
+    const chatBody = getEl('chatBody');
+    if (chatBody) chatBody.appendChild(loadingDiv);
+    if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
     
     try {
-        const res = await fetch("/api/stroke_qa_stream", {
+        const res = await fetch("/api/stroke_qa", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ question: text })
         });
-        loadingDiv.remove();
-        
-        const assistantDiv = document.createElement("div");
-        assistantDiv.className = "message assistant";
-        assistantDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
-        chatBody.appendChild(assistantDiv);
-        const bubble = assistantDiv.querySelector(".msg-bubble");
-        let full = "";
-        
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n\n");
-            buffer = lines.pop();
-            for (const line of lines) {
-                if (line.startsWith("data: ")) {
-                    const jsonStr = line.slice(6);
-                    try {
-                        const data = JSON.parse(jsonStr);
-                        if (data.chunk) {
-                            full += data.chunk;
-                            bubble.innerHTML = full.replace(/\\n/g, '<br>');
-                            chatBody.scrollTop = chatBody.scrollHeight;
-                        }
-                    } catch (e) {}
-                }
-            }
-        }
-        if (voiceEnabled && full) speak(full);
+        const data = await res.json();
+        const ans = data.data.answer;
+        if (loadingDiv) loadingDiv.remove();
+        addMsg('assistant', ans);
+        speak(ans);
     } catch (err) {
-        loadingDiv.remove();
-        addMsg("assistant", "抱歉，网络错误，请稍后再试。");
+        if (loadingDiv) loadingDiv.remove();
+        addMsg('assistant', '抱歉，网络错误，请稍后再试。');
         console.error(err);
     }
 }
 
-function addMsg(role, text) {
-    const body = document.getElementById("chatBody");
-    const div = document.createElement("div");
-    div.className = "message " + role;
-    let avatar = role === "user" ? patientAvatar : doctorAvatar;
-    let cleanedText = text.replace(/\\*\\*/g, '');
-    div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleanedText.replace(/\\n/g, '<br>')}</div>`;
-    body.appendChild(div);
-    body.scrollTop = body.scrollHeight;
-}
-
-async function switchLang() {
-    lang = lang === "zh" ? "en" : "zh";
-    await fetch("/api/switch_lang", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang })
-    });
-    document.getElementById("langBtn").innerText = lang === "zh" ? "切换英文" : "切换中文";
-    clearChat();
-}
-
-function clearChat() {
-    const body = document.getElementById("chatBody");
-    body.innerHTML = `<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang === "zh" ? "你好！我是脑卒中智能助手~" : "Hello! I'm stroke assistant~"}</div></div>`;
-}
-
 function quickAsk(question) {
-    const input = document.getElementById("input");
-    input.value = question;
+    const inputEl = getEl('input');
+    if (inputEl) inputEl.value = question;
     send();
 }
 
-// ========== 移动端适配（仅调整布局，不覆盖字体大小） ==========
+// 移动端适配
 (function() {
     if (window.innerWidth <= 768) {
         function applyMobileStyles() {
-            var sidebar = document.querySelector('.sidebar');
-            var chatMain = document.querySelector('.chat-main');
-            var chatContent = document.querySelector('.chat-content');
-            
+            const sidebar = document.querySelector('.sidebar');
+            const chatMain = document.querySelector('.chat-main');
+            const chatContent = document.querySelector('.chat-content');
             if (sidebar) sidebar.style.display = 'none';
             if (chatMain) {
                 chatMain.style.width = '100%';
@@ -933,10 +820,8 @@ function quickAsk(question) {
                 chatContent.style.display = 'flex';
                 chatContent.style.flexDirection = 'row';
             }
-            
-            var style = document.createElement('style');
-            style.type = 'text/css';
-            style.innerHTML = `
+            const style = document.createElement('style');
+            style.textContent = `
                 body header { margin-bottom: 8px !important; }
                 body header h1 { font-size: 24px !important; margin-bottom: 2px !important; }
                 body header p { font-size: 12px !important; display: none !important; }
@@ -954,7 +839,6 @@ function quickAsk(question) {
             `;
             document.head.appendChild(style);
         }
-        
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', applyMobileStyles);
         } else {
@@ -962,31 +846,61 @@ function quickAsk(question) {
         }
     }
 })();
-// ====================================
 
-// 将所有事件绑定放在 DOMContentLoaded 中，确保元素存在
+// 在DOM加载完成后绑定所有事件
 document.addEventListener('DOMContentLoaded', function() {
-    console.log("DOM fully loaded, binding events...");
-    document.getElementById("sendBtn").onclick = send;
-    document.getElementById("clearBtn").onclick = clearChat;
-    document.getElementById("langBtn").onclick = switchLang;
-    document.getElementById("micBtn").onclick = toggleRec;
-    document.getElementById("voiceBtn").onclick = toggleVoice;
-    document.getElementById("fontBtn").onclick = openFontModal;
-    document.getElementById("input").onkeydown = function(e) {
-        if (e.key === "Enter") {
+    console.log("DOM ready, binding events...");
+    
+    // 绑定按钮事件
+    getEl('sendBtn')?.addEventListener('click', send);
+    getEl('clearBtn')?.addEventListener('click', clearChat);
+    getEl('langBtn')?.addEventListener('click', switchLang);
+    getEl('micBtn')?.addEventListener('click', toggleRec);
+    getEl('voiceBtn')?.addEventListener('click', toggleVoice);
+    getEl('fontBtn')?.addEventListener('click', openFontModal);
+    getEl('confirmFontBtn')?.addEventListener('click', adjustFont);
+    getEl('enlargeBtn')?.addEventListener('click', () => selectOpt('enlarge'));
+    getEl('narrowBtn')?.addEventListener('click', () => selectOpt('narrow'));
+    getEl('input')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
             e.preventDefault();
             send();
         }
-    };
-    document.getElementById("fontModal").onclick = e => e.stopPropagation();
-    document.getElementById("scaleInput").onkeydown = e => e.key === "Enter" && adjustFont();
-    // 确保字体调节确认按钮绑定（因为 onclick 属性已经存在，但以防万一）
-    const confirmBtn = document.querySelector('.confirm-btn');
-    if (confirmBtn && !confirmBtn.hasAttribute('data-bound')) {
-        confirmBtn.setAttribute('data-bound', 'true');
-        confirmBtn.onclick = adjustFont;
+    });
+    getEl('modalMask')?.addEventListener('click', closeFontModal);
+    getEl('fontModal')?.addEventListener('click', (e) => e.stopPropagation());
+    getEl('scaleInput')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') adjustFont();
+    });
+    
+    // 快捷提问按钮
+    const questions = [
+        '高血压怎么预防中风？',
+        '中风后吃什么好？',
+        '家人中风后怎么照顾？',
+        '怎么判断是不是中风？',
+        '中风后手脚没力气怎么办？',
+        '中风后情绪低落怎么办？',
+        '中风康复训练有哪些？',
+        '颈动脉斑块需要治疗吗？',
+        '中风后可以运动吗？',
+        '怎么帮家人做心理疏导？'
+    ];
+    for (let i = 1; i <= 10; i++) {
+        const btn = getEl(`quick${i}`);
+        if (btn) {
+            btn.addEventListener('click', () => quickAsk(questions[i-1]));
+        }
     }
+    
+    // 确保输入框可编辑
+    const inputEl = getEl('input');
+    if (inputEl) {
+        inputEl.removeAttribute('readonly');
+        inputEl.removeAttribute('disabled');
+    }
+    
+    console.log("All events bound successfully.");
 });
 </script>
 </body>
