@@ -2,70 +2,27 @@
 from flask import Flask, request, jsonify, render_template_string
 import re
 import os
-from openai import OpenAI
 from dashscope import Application
 
 app = Flask(__name__)
 
 # ============================================================
-# 环境变量读取（在 Render 的 Environment 中设置）
+# 环境变量（在 Render 中设置）
 # ============================================================
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
-DASHSCOPE_WORKSPACE_ID = os.environ.get("DASHSCOPE_WORKSPACE_ID")  # 可选，如果知识库在默认空间则不需要
-DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+DASHSCOPE_APP_ID = os.environ.get("DASHSCOPE_APP_ID")
+DASHSCOPE_WORKSPACE_ID = os.environ.get("DASHSCOPE_WORKSPACE_ID")
 
 if not DASHSCOPE_API_KEY:
-    print("警告：未设置环境变量 DASHSCOPE_API_KEY，RAG 检索将不可用，大模型调用也可能失败")
-
-# 初始化 OpenAI 客户端（用于大模型生成）
-if DASHSCOPE_API_KEY:
-    client = OpenAI(api_key=DASHSCOPE_API_KEY, base_url=DASHSCOPE_BASE_URL)
-else:
-    client = None
-    print("错误：无法创建 OpenAI 客户端，请设置环境变量 DASHSCOPE_API_KEY")
-
-# 模型名称（建议使用稳定的公开模型）
-MODEL_NAME = "qwen3-32b_eb56be00"  
-# ============================================================
-# 知识库检索函数
-# ============================================================
-def retrieve_from_knowledge_base(question, top_k=3):
-    """
-    从阿里云百炼知识库中检索与问题最相关的文档片段
-    参数:
-        question: 用户问题
-        top_k: 返回的最相关片段数量（默认3）
-    返回:
-        list of str: 文档片段列表
-    """
-    if not DASHSCOPE_API_KEY:
-        return []
-    try:
-        INDEX_NAME = "ssy8053dlh"   
-        
-        response = Retrieval.search(
-            workspace_id=DASHSCOPE_WORKSPACE_ID,  
-            index_name=INDEX_NAME,
-            query=question,
-            dense_similarity_top_k=top_k,
-            sparse_similarity_top_k=top_k,
-            enable_reranking=True,
-            rerank_top_n=top_k
-        )
-        docs = []
-        if response and hasattr(response, 'output') and response.output:
-            for doc in response.output.documents:
-                docs.append(doc.text)
-        return docs
-    except Exception as e:
-        print(f"知识库检索失败: {e}")
-        return []
+    print("警告：未设置环境变量 DASHSCOPE_API_KEY，RAG 应用将无法调用")
+if not DASHSCOPE_APP_ID:
+    print("警告：未设置环境变量 DASHSCOPE_APP_ID，RAG 应用将无法调用")
 
 # ============================================================
-# 大模型调用函数（集成 RAG 检索）
+# 大模型调用函数（使用百炼 RAG 应用，增加去重和长度限制）
 # ============================================================
 def call_llm(question):
-    # 1. 非紧急症状过滤（保持不变）
+    # 1. 非紧急症状过滤
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
@@ -74,17 +31,16 @@ def call_llm(question):
         return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
 
-    # 2. 调用百炼 RAG 应用（启用流式输出 + 更长超时）
+    # 2. 调用百炼 RAG 应用（启用流式输出，增加超时）
     try:
         response = Application.call(
-            app_id=os.environ.get("DASHSCOPE_APP_ID"),
+            app_id=DASHSCOPE_APP_ID,
             prompt=question,
-            api_key=os.environ.get("DASHSCOPE_API_KEY"),
-            workspace_id=os.environ.get("DASHSCOPE_WORKSPACE_ID"),
-            stream=True,          # 开启流式输出
-            timeout=120           # 增加读取超时到 120 秒
+            api_key=DASHSCOPE_API_KEY,
+            workspace_id=DASHSCOPE_WORKSPACE_ID,
+            stream=True,
+            timeout=120
         )
-        # 收集流式响应
         full_answer = ""
         for chunk in response:
             if chunk.output and chunk.output.text:
@@ -95,17 +51,35 @@ def call_llm(question):
         print(f"百炼应用调用失败: {e}")
         return "抱歉，系统繁忙，请稍后再试。"
 
-    # 3. 后处理（去除“您说得对”等开头）
+    # 3. 后处理：去除重复段落（防止模型无限重复）
+    lines = full_answer.split('\n')
+    unique_lines = []
+    last_line = ""
+    for line in lines:
+        if line.strip() != last_line.strip():
+            unique_lines.append(line)
+            last_line = line
+        else:
+            # 遇到重复行，跳过
+            continue
+    full_answer = '\n'.join(unique_lines)
+    
+    # 限制最大长度（2000字符），避免输出过长
+    if len(full_answer) > 2000:
+        full_answer = full_answer[:2000] + "...\n\n（回答过长已截断，如需完整信息请咨询医生）"
+    
+    # 去除常见的肯定性开头短语
     prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
     full_answer = prefix_pattern.sub('', full_answer).strip()
-
-    # 4. 二次安全过滤
+    
+    # 二次安全过滤
     emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
     if full_answer and any(kw in full_answer for kw in emergency_keywords):
         if mild_pattern.search(question):
             return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                     "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
     return full_answer if full_answer else "抱歉，模型未返回有效回答。"
+
 # ============================================================
 # Flask 路由
 # ============================================================
@@ -136,7 +110,8 @@ def stroke_qa():
 
 @app.route('/')
 def index():
-    return render_template_string('''<!DOCTYPE html>
+    return render_template_string('''
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -345,9 +320,6 @@ def index():
             scrollbar-width: thin;
             -webkit-overflow-scrolling: touch;
         }
-        .quick-questions::-webkit-scrollbar {
-            height: 4px;
-        }
         .quick-questions button {
             background: #eef3fc;
             border: 1px solid #cce4f5;
@@ -482,8 +454,6 @@ def index():
         .modal-mask.show {
             display: block;
         }
-
-        /* 移动端适配 */
         @media (max-width: 768px) {
             .sidebar { display: none !important; }
             .chat-main { width: 100% !important; }
@@ -531,13 +501,39 @@ def index():
             <div class="sidebar">
                 <div class="avatar-card">
                     <div class="avatar-box">
-                        <svg viewBox="0 0 120 120" width="80" height="80">...</svg>
+                        <svg viewBox="0 0 120 120" width="80" height="80">
+                            <circle cx="60" cy="60" r="58" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
+                            <rect x="35" y="25" width="50" height="50" rx="8" fill="#f5d6c0" stroke="#333" stroke-width="1.5"/>
+                            <rect x="35" y="25" width="50" height="12" rx="2" fill="#2c3e50"/>
+                            <rect x="32" y="22" width="10" height="8" rx="1" fill="#2c3e50"/>
+                            <rect x="78" y="22" width="10" height="8" rx="1" fill="#2c3e50"/>
+                            <circle cx="50" cy="50" r="3" fill="#fff" stroke="#2c3e50" stroke-width="1.5"/>
+                            <circle cx="70" cy="50" r="3" fill="#fff" stroke="#2c3e50" stroke-width="1.5"/>
+                            <line x1="50" y1="65" x2="70" y2="65" stroke="#2c3e50" stroke-width="1.5" stroke-linecap="round"/>
+                            <rect x="25" y="75" width="70" height="35" rx="4" fill="#ffffff" stroke="#0077cc" stroke-width="2"/>
+                            <line x1="60" y1="75" x2="60" y2="110" stroke="#0077cc" stroke-width="1.5"/>
+                            <circle cx="40" cy="90" r="4" fill="#0077cc" stroke="#333" stroke-width="1"/>
+                            <circle cx="80" cy="90" r="4" fill="#0077cc" stroke="#333" stroke-width="1"/>
+                            <path d="M40 90 C30 80, 90 80, 80 90" stroke="#0077cc" stroke-width="2" fill="none"/>
+                        </svg>
                     </div>
                     <h3>福医卒中通助手</h3>
                 </div>
                 <div class="avatar-card">
                     <div class="avatar-box patient">
-                        <svg viewBox="0 0 120 120" width="80" height="80">...</svg>
+                        <svg viewBox="0 0 120 120" width="80" height="80">
+                            <circle cx="60" cy="60" r="58" fill="#f0f9ff" stroke="#5499c7" stroke-width="1"/>
+                            <rect x="35" y="25" width="50" height="50" rx="8" fill="#f5d6c0" stroke="#333" stroke-width="1.5"/>
+                            <rect x="35" y="25" width="50" height="12" rx="2" fill="#2c3e50"/>
+                            <rect x="32" y="22" width="8" height="7" rx="1" fill="#2c3e50"/>
+                            <rect x="80" y="22" width="8" height="7" rx="1" fill="#2c3e50"/>
+                            <circle cx="50" cy="50" r="3" fill="#fff" stroke="#2c3e50" stroke-width="1.5"/>
+                            <circle cx="70" cy="50" r="3" fill="#fff" stroke="#2c3e50" stroke-width="1.5"/>
+                            <line x1="50" y1="65" x2="70" y2="65" stroke="#2c3e50" stroke-width="1.5" stroke-linecap="round"/>
+                            <path d="M25 75 L35 70 L85 70 L95 75 L90 110 L30 110 Z" fill="#ffffff" stroke="#5499c7" stroke-width="2"/>
+                            <line x1="60" y1="70" x2="60" y2="110" stroke="#5499c7" stroke-width="1.5"/>
+                            <rect x="50" y="70" width="20" height="5" rx="2" fill="#f0f9ff" stroke="#5499c7" stroke-width="1.5"/>
+                        </svg>
                     </div>
                     <h3 class="patient-text">咨询患者</h3>
                 </div>
@@ -557,7 +553,16 @@ def index():
                 </div>
                 <div class="chat-body" id="chatBody">
                     <div class="message">
-                        <div class="msg-avatar"><svg viewBox="0 0 44 44" width="26" height="26">...</svg></div>
+                        <div class="msg-avatar">
+                            <svg viewBox="0 0 44 44" width="26" height="26">
+                                <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
+                                <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
+                                <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
+                                <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+                                <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+                                <rect x="8" y="28" width="28" height="12" rx="2" fill="#fff" stroke="#0077cc" stroke-width="1"/>
+                            </svg>
+                        </div>
                         <div class="msg-bubble">你好！我是脑卒中智能助手，可咨询预防、康复、养护、心理支持等问题~</div>
                     </div>
                 </div>
@@ -629,9 +634,7 @@ function adjustFont() {
     const scaleInput = document.getElementById('scaleInput');
     let rawValue = scaleInput.value.trim();
     let scale = parseFloat(rawValue);
-    if (isNaN(scale) || scale <= 0) {
-        scale = 1;
-    }
+    if (isNaN(scale) || scale <= 0) scale = 1;
     if (fontOpt === 'enlarge') {
         scale = Math.min(4, Math.max(1, scale));
     } else {
@@ -643,64 +646,16 @@ function adjustFont() {
 }
 
 function openFontModal() {
-    const modal = document.getElementById('fontModal');
-    const mask = document.getElementById('modalMask');
-    modal.classList.add('show');
-    mask.classList.add('show');
+    document.getElementById('fontModal').classList.add('show');
+    document.getElementById('modalMask').classList.add('show');
     document.getElementById('scaleInput').focus();
 }
 
 function closeFontModal() {
-    const modal = document.getElementById('fontModal');
-    const mask = document.getElementById('modalMask');
-    modal.classList.remove('show');
-    mask.classList.remove('show');
+    document.getElementById('fontModal').classList.remove('show');
+    document.getElementById('modalMask').classList.remove('show');
     selectOpt('enlarge');
     document.getElementById('scaleInput').value = '';
-}
-
-function toggleVoice() {
-    voiceEnabled = !voiceEnabled;
-    const btn = document.getElementById("voiceBtn");
-    btn.innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
-    if (!voiceEnabled) {
-        if (synth) synth.cancel();
-    } else {
-        const lastMsg = getLastAssistantMessage();
-        if (lastMsg) speak(lastMsg);
-    }
-}
-
-function getLastAssistantMessage() {
-    const messages = document.querySelectorAll('.message.assistant .msg-bubble');
-    if (messages.length === 0) return null;
-    const lastBubble = messages[messages.length - 1];
-    return lastBubble.innerText.trim();
-}
-
-function speak(text) {
-    if (!voiceEnabled) return;
-    if (!text) return;
-    if (synth) synth.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang === "zh" ? "zh-CN" : "en-US";
-    utterance.onerror = function(e) {
-        console.error("语音播报失败:", e);
-    };
-    synth.speak(utterance);
-}
-
-async function switchLang() {
-    lang = lang === "zh" ? "en" : "zh";
-    try {
-        await fetch("/api/switch_lang", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lang })
-        });
-    } catch(e) { console.error("语言切换API调用失败", e); }
-    document.getElementById("langBtn").innerText = lang === "zh" ? "切换英文" : "切换中文";
-    clearChat();
 }
 
 async function ensureMicrophonePermission() {
@@ -740,8 +695,7 @@ function startRecognition() {
     recognition.maxAlternatives = 1;
     recognition.onstart = () => {
         isRecording = true;
-        const btn = document.getElementById("micBtn");
-        if (btn) btn.classList.add("recording");
+        document.getElementById("micBtn")?.classList.add("recording");
     };
     recognition.onresult = (event) => {
         const transcript = event.results[0][0].transcript;
@@ -784,8 +738,7 @@ function stopRec() {
         activeRecognition = null;
     }
     isRecording = false;
-    const btn = document.getElementById("micBtn");
-    if (btn) btn.classList.remove("recording");
+    document.getElementById("micBtn")?.classList.remove("recording");
 }
 
 window.addEventListener('beforeunload', function() {
@@ -796,12 +749,52 @@ window.addEventListener('beforeunload', function() {
     if (synth) synth.cancel();
 });
 
+function toggleVoice() {
+    voiceEnabled = !voiceEnabled;
+    document.getElementById("voiceBtn").innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
+    if (!voiceEnabled) {
+        if (synth) synth.cancel();
+    } else {
+        const lastMsg = getLastAssistantMessage();
+        if (lastMsg) speak(lastMsg);
+    }
+}
+
+function getLastAssistantMessage() {
+    const messages = document.querySelectorAll('.message.assistant .msg-bubble');
+    if (messages.length === 0) return null;
+    const lastBubble = messages[messages.length - 1];
+    return lastBubble.innerText.trim();
+}
+
+function speak(text) {
+    if (!voiceEnabled) return;
+    if (!text) return;
+    if (synth) synth.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = lang === "zh" ? "zh-CN" : "en-US";
+    utterance.onerror = (e) => console.error("语音播报失败:", e);
+    synth.speak(utterance);
+}
+
+async function switchLang() {
+    lang = lang === "zh" ? "en" : "zh";
+    try {
+        await fetch("/api/switch_lang", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lang })
+        });
+    } catch(e) { console.error("语言切换API调用失败", e); }
+    document.getElementById("langBtn").innerText = lang === "zh" ? "切换英文" : "切换中文";
+    clearChat();
+}
+
 async function send() {
-    const inputEl = document.getElementById("input");
-    const text = inputEl.value.trim();
+    const text = document.getElementById("input").value.trim();
     if (!text) return;
     addMsg("user", text);
-    inputEl.value = "";
+    document.getElementById("input").value = "";
     
     const loadingDiv = document.createElement("div");
     loadingDiv.className = "message assistant loading-message";
@@ -849,49 +842,6 @@ function quickAsk(question) {
     send();
 }
 
-// 移动端适配（仅调整布局）
-(function() {
-    if (window.innerWidth <= 768) {
-        function applyMobileStyles() {
-            const sidebar = document.querySelector('.sidebar');
-            const chatMain = document.querySelector('.chat-main');
-            const chatContent = document.querySelector('.chat-content');
-            if (sidebar) sidebar.style.display = 'none';
-            if (chatMain) {
-                chatMain.style.width = '100%';
-                chatMain.style.flex = '1';
-            }
-            if (chatContent) {
-                chatContent.style.display = 'flex';
-                chatContent.style.flexDirection = 'row';
-            }
-            const style = document.createElement('style');
-            style.textContent = `
-                body header { margin-bottom: 8px !important; }
-                body header p { display: none !important; }
-                body .chat-header-bar { padding: 8px 12px !important; }
-                body .chat-header-bar h2 { font-size: calc(20px * var(--font-scale)) !important; }
-                body .header-btn { font-size: calc(12px * var(--font-scale)) !important; padding: 4px 8px !important; }
-                body .chat-body { padding: 12px !important; }
-                body .msg-bubble { padding: 8px 12px !important; }
-                body .quick-questions button { font-size: calc(13px * var(--font-scale)) !important; padding: 6px 12px !important; }
-                body .chat-footer { padding: 8px 12px !important; }
-                body .chat-input { padding: 8px 12px !important; }
-                body .send-btn, body .clear-btn { padding: 6px 12px !important; }
-                body .mic-btn { width: 32px !important; height: 32px !important; }
-                body .message { max-width: 90% !important; }
-            `;
-            document.head.appendChild(style);
-        }
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', applyMobileStyles);
-        } else {
-            applyMobileStyles();
-        }
-    }
-})();
-
-// 事件绑定
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById("fontBtn").onclick = openFontModal;
     document.getElementById("confirmFontBtn").onclick = adjustFont;
@@ -909,9 +859,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
     document.getElementById("modalMask").onclick = closeFontModal;
-    document.getElementById("fontModal").onclick = function(e) {
-        e.stopPropagation();
-    };
+    document.getElementById("fontModal").onclick = function(e) { e.stopPropagation(); };
     document.getElementById("scaleInput").onkeydown = function(e) {
         if (e.key === "Enter") adjustFont();
     };
