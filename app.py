@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify, render_template_string, Response
 import re
 import os
 import json
+import time
 from dashscope import Application
 
 app = Flask(__name__)
@@ -23,7 +24,7 @@ if not DASHSCOPE_APP_ID:
 # 流式生成器（带去重和长度限制）
 # ============================================================
 def generate_stream(question):
-    """生成流式响应，逐块返回答案片段，同时保留最终完整答案用于可能的后续处理"""
+    """生成流式响应，逐块返回答案片段"""
     # 1. 非紧急症状过滤
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
@@ -35,6 +36,7 @@ def generate_stream(question):
         # 将固定答案分块发送（模拟打字）
         for i in range(0, len(fixed_answer), 20):
             yield fixed_answer[i:i+20]
+            time.sleep(0.05)
         return
 
     # 2. 调用百炼 RAG 应用（流式输出）
@@ -54,40 +56,33 @@ def generate_stream(question):
 
     # 3. 流式接收并实时发送（同时做去重和长度累积）
     full_answer = ""
-    last_chunk = ""          # 用于去除连续重复的文本块
-    buffer = ""              # 缓冲区，按句子或达到长度发送
-    max_length = 2000        # 最大字符限制
+    last_chunk = ""
+    buffer = ""
+    max_length = 2000
 
     for chunk in response:
         if chunk.output and chunk.output.text:
             text = chunk.output.text
-            # 去重：如果当前块与上一块完全相同，则跳过
+            # 去重
             if text == last_chunk:
                 continue
             last_chunk = text
             buffer += text
             full_answer += text
 
-            # 如果累积的缓冲区超过2000字符，截断并停止后续
             if len(full_answer) > max_length:
-                # 只发送截断后的部分
                 remaining = max_length - (len(full_answer) - len(buffer))
                 if remaining > 0:
                     yield buffer[:remaining]
                 yield "\n\n（回答过长已截断，如需完整信息请咨询医生）"
                 return
 
-            # 按句子或达到30字符发送
             if len(buffer) > 30 or buffer.endswith(('。', '！', '？', '\n')):
                 yield buffer
                 buffer = ""
 
-    # 发送剩余的缓冲区内容
     if buffer:
         yield buffer
-
-    # 可选：发送结束标记（前端可据此处理）
-    # 无需额外发送
 
 # ============================================================
 # 非流式调用（保留，用于兼容）
@@ -121,7 +116,6 @@ def call_llm(question):
         print(f"百炼应用调用失败: {e}")
         return "抱歉，系统繁忙，请稍后再试。"
 
-    # 去重和长度限制（与原代码相同）
     lines = full_answer.split('\n')
     unique_lines = []
     last_line = ""
@@ -160,7 +154,6 @@ def switch_lang():
 
 @app.route('/api/stroke_qa', methods=['POST', 'OPTIONS'])
 def stroke_qa():
-    """非流式接口（保留兼容）"""
     if request.method == 'OPTIONS':
         return '', 200
     data = request.get_json(silent=True) or {}
@@ -172,7 +165,6 @@ def stroke_qa():
 
 @app.route('/api/stroke_qa_stream', methods=['POST', 'OPTIONS'])
 def stroke_qa_stream():
-    """流式接口（打字机效果）"""
     if request.method == 'OPTIONS':
         return '', 200
     data = request.get_json(silent=True) or {}
@@ -784,7 +776,6 @@ async function send() {
         });
         loadingDiv.remove();
         
-        // 创建助手消息容器
         const assistantMsgDiv = document.createElement("div");
         assistantMsgDiv.className = "message assistant";
         assistantMsgDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
@@ -810,8 +801,6 @@ async function send() {
                             fullText += data.chunk;
                             bubble.innerHTML = fullText.replace(/\\n/g, '<br>');
                             chatBody.scrollTop = chatBody.scrollHeight;
-                        } else if (data.done) {
-                            // 流结束
                         }
                     } catch (e) { console.error(e); }
                 }
