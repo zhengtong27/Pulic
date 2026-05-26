@@ -26,12 +26,12 @@
         @keyframes breathing{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
         .chat-main{flex:1;display:flex;flex-direction:column;overflow:hidden}
         .quick-questions{padding:12px 16px;background:#f5f9fe;border-bottom:1px solid #e6f0fa;overflow-x:auto;white-space:nowrap;display:flex;gap:10px}
-        .quick-questions button{background:#eef3fc;border:1px solid #cce4f5;border-radius:24px;padding:8px 16px;font-size:calc(24px * var(--font-scale));color:#0077cc;cursor:pointer}
+        .quick-questions button{background:#eef3fc;border:1px solid #cce4f5;border-radius:24px;padding:8px 16px;font-size:calc(24px * var(--font-scale));color:#0077cc;cursor:pointer;white-space:nowrap;flex-shrink:0}
         .chat-body{flex:1;padding:20px;overflow-y:auto;background:#fafbfc}
         .message{display:flex;gap:10px;margin-bottom:14px;max-width:75%}
         .message.user{margin-left:auto;flex-direction:row-reverse}
         .msg-avatar{width:36px;height:36px;border-radius:50%;background:#fff;border:1px solid #eee;display:flex;align-items:center;justify-content:center}
-        .msg-bubble{padding:10px 14px;border-radius:14px;background:#fff;border:1px solid #eee;line-height:1.5;font-size:calc(28px * var(--font-scale))}
+        .msg-bubble{padding:10px 14px;border-radius:14px;background:#fff;border:1px solid #eee;line-height:1.5;font-size:calc(28px * var(--font-scale));word-break:break-word}
         .message.user .msg-bubble{background:#0077cc;color:#fff;border:none}
         .chat-footer{position:fixed;bottom:0;left:0;width:100%;padding:14px 20px;border-top:1px solid #eee;display:flex;gap:10px;background:#fff;z-index:99;padding-bottom:calc(14px + env(safe-area-inset-bottom))}
         .chat-input{flex:1;padding:10px 16px;border:1px solid #ddd;border-radius:24px;outline:none;font-size:calc(28px * var(--font-scale))}
@@ -146,10 +146,7 @@ function addMsg(role, text){
     let div=document.createElement('div'); div.className='message '+role;
     let avatar=role==='user'?patientAvatar:doctorAvatar;
     let cleaned=text.replace(/\*\*/g, '');
-    div.innerHTML=`
-        <div class="msg-avatar">${avatar}</div>
-        <div class="msg-bubble">${cleaned.replace(/\n/g, '<br>')}</div>
-    `;
+    div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleaned.replace(/\n/g, '<br>')}</div>`;
     body.appendChild(div); body.scrollTop=body.scrollHeight;
 }
 function clearChat(){ let body=getEl('chatBody'); if(body) body.innerHTML=`<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang==='zh'?'你好！我是脑卒中智能助手~':'Hello! I\'m stroke assistant~'}</div></div>`; }
@@ -159,40 +156,26 @@ async function send(){
     let loading=document.createElement('div'); loading.className='message assistant loading-message'; loading.innerHTML=`<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
     let chatBody=getEl('chatBody'); if(chatBody) chatBody.appendChild(loading); if(chatBody) chatBody.scrollTop=chatBody.scrollHeight;
     try{
-        const response = await fetch('/api/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: text })
-        });
+        const response = await fetch('/api/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: text }) });
         if(loading) loading.remove();
-        const assistantDiv = document.createElement('div');
-        assistantDiv.className = 'message assistant';
-        assistantDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
+        const assistantDiv = document.createElement('div'); assistantDiv.className = 'message assistant'; assistantDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
         if(chatBody) chatBody.appendChild(assistantDiv);
         const bubble = assistantDiv.querySelector('.msg-bubble');
         let full = '';
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
+        const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
         while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+            const { done, value } = await reader.read(); if (done) break;
             buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n\n');
-            buffer = lines.pop();
+            const lines = buffer.split('\n\n'); buffer = lines.pop();
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
                     const jsonStr = line.slice(6);
                     try {
                         const data = JSON.parse(jsonStr);
-                        if (data.chunk) {
+                        if (data.chunk !== undefined) {
                             full += data.chunk;
-                            // 移除 ** 符号
-                            let displayText = full.replace(/\*\*/g, '');
-                            bubble.innerHTML = displayText.replace(/\n/g, '<br>');
+                            bubble.innerHTML = full.replace(/\n/g, '<br>');
                             if(chatBody) chatBody.scrollTop = chatBody.scrollHeight;
-                        } else if (data.done) {
-                            // 完成
                         }
                     } catch(e) { console.error(e); }
                 }
@@ -201,8 +184,7 @@ async function send(){
         if (voiceEnabled && full) speak(full);
     }catch(err){
         if(loading) loading.remove();
-        addMsg('assistant','抱歉，网络错误，请稍后再试。');
-        console.error(err);
+        addMsg('assistant','抱歉，网络错误，请稍后再试。'); console.error(err);
     }
 }
 function quickAsk(q){ let inp=getEl('input'); if(inp) inp.value=q; send(); }
