@@ -31,7 +31,7 @@ def call_llm(question):
         return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
 
-    # 2. 调用百炼 RAG 应用（启用流式输出，增加超时）
+    # 2. 调用百炼 RAG 应用（流式输出）
     try:
         response = Application.call(
             app_id=DASHSCOPE_APP_ID,
@@ -39,34 +39,40 @@ def call_llm(question):
             api_key=DASHSCOPE_API_KEY,
             workspace_id=DASHSCOPE_WORKSPACE_ID,
             stream=True,
-            timeout=120
+            timeout=180  # 增加到 180 秒
         )
         full_answer = ""
+        # 记录上一次非空文本片段，用于检测重复追加
+        prev_chunk = ""
         for chunk in response:
             if chunk.output and chunk.output.text:
-                full_answer += chunk.output.text
+                text = chunk.output.text
+                # 防止模型连续输出完全相同的片段（重复追加）
+                if text == prev_chunk:
+                    continue
+                full_answer += text
+                prev_chunk = text
         if not full_answer:
             full_answer = "抱歉，未能获取到有效回答。"
     except Exception as e:
         print(f"百炼应用调用失败: {e}")
         return "抱歉，系统繁忙，请稍后再试。"
 
-    # 3. 后处理：去除重复段落（防止模型无限重复）
+    # 3. 后处理：去除重复段落（按行去重，连续重复跳过）
     lines = full_answer.split('\n')
     unique_lines = []
     last_line = ""
     for line in lines:
-        if line.strip() != last_line.strip():
-            unique_lines.append(line)
-            last_line = line
-        else:
-            # 遇到重复行，跳过
+        line_stripped = line.strip()
+        if line_stripped == last_line:
             continue
+        unique_lines.append(line)
+        last_line = line_stripped
     full_answer = '\n'.join(unique_lines)
     
-    # 限制最大长度（2000字符），避免输出过长
-    if len(full_answer) > 2000:
-        full_answer = full_answer[:2000] + "...\n\n（回答过长已截断，如需完整信息请咨询医生）"
+    # 限制最大长度 1500 字符，避免过长
+    if len(full_answer) > 1500:
+        full_answer = full_answer[:1500] + "\n\n（回答过长已截断，如需完整信息请咨询医生）"
     
     # 去除常见的肯定性开头短语
     prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
@@ -105,8 +111,23 @@ def stroke_qa():
     question = data.get("question", "")
     if not question:
         return jsonify({"status": "error", "message": "问题不能为空"})
-    answer = call_llm(question)
-    return jsonify({"status": "success", "data": {"answer": answer}})
+    
+    # 重试逻辑：最多尝试2次
+    max_retries = 2
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            answer = call_llm(question)
+            if answer and not answer.startswith("抱歉"):  # 只要不是错误前缀就返回
+                return jsonify({"status": "success", "data": {"answer": answer}})
+        except Exception as e:
+            last_error = e
+            print(f"第{attempt+1}次调用失败: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)  # 等待1秒后重试
+            continue
+    # 所有重试都失败，返回通用错误
+    return jsonify({"status": "error", "message": "服务暂时不可用，请稍后再试"})
 
 @app.route('/')
 def index():
