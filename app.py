@@ -3,7 +3,6 @@ from flask import Flask, request, jsonify, render_template_string
 import re
 import os
 from openai import OpenAI
-from dashscope import Retrieval
 from dashscope import Application
 
 app = Flask(__name__)
