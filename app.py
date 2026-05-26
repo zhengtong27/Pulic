@@ -2,7 +2,6 @@
 from flask import Flask, request, jsonify, render_template_string, Response
 import re
 import os
-import time
 import json
 from dashscope import Application
 
@@ -21,10 +20,10 @@ if not DASHSCOPE_APP_ID:
     print("警告：未设置环境变量 DASHSCOPE_APP_ID，RAG 应用将无法调用")
 
 # ============================================================
-# 流式生成函数（带去重和缓冲）
+# 流式生成器（带去重和长度限制）
 # ============================================================
 def generate_stream(question):
-    """生成流式响应，逐块返回答案片段"""
+    """生成流式响应，逐块返回答案片段，同时保留最终完整答案用于可能的后续处理"""
     # 1. 非紧急症状过滤
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
@@ -36,46 +35,111 @@ def generate_stream(question):
         # 将固定答案分块发送（模拟打字）
         for i in range(0, len(fixed_answer), 20):
             yield fixed_answer[i:i+20]
-            time.sleep(0.05)
         return
 
-    # 2. 构建带有防重复指令的提示词
-    enhanced_prompt = f"请直接回答用户的问题。要求：1. 不要重复已经说过的话，不要输出重复段落。2. 答案简洁，控制在500字以内。\n\n用户问题：{question}"
-
+    # 2. 调用百炼 RAG 应用（流式输出）
     try:
-        # 开启流式调用
         response = Application.call(
             app_id=DASHSCOPE_APP_ID,
-            prompt=enhanced_prompt,
+            prompt=question,
             api_key=DASHSCOPE_API_KEY,
             workspace_id=DASHSCOPE_WORKSPACE_ID,
             stream=True,
-            timeout=60
+            timeout=120
         )
-
-        # 用于去重的缓冲区
-        last_chunk = ""
-        buffer = ""
-
-        for chunk in response:
-            if chunk.output and chunk.output.text:
-                text = chunk.output.text
-                if text == last_chunk:
-                    continue
-                last_chunk = text
-                buffer += text
-
-                # 按句子或达到一定长度就发送
-                if len(buffer) > 30 or buffer.endswith(('。', '！', '？', '\n')):
-                    yield buffer
-                    buffer = ""
-
-        if buffer:
-            yield buffer
-
     except Exception as e:
         print(f"百炼应用调用失败: {e}")
         yield "抱歉，系统繁忙，请稍后再试。"
+        return
+
+    # 3. 流式接收并实时发送（同时做去重和长度累积）
+    full_answer = ""
+    last_chunk = ""          # 用于去除连续重复的文本块
+    buffer = ""              # 缓冲区，按句子或达到长度发送
+    max_length = 2000        # 最大字符限制
+
+    for chunk in response:
+        if chunk.output and chunk.output.text:
+            text = chunk.output.text
+            # 去重：如果当前块与上一块完全相同，则跳过
+            if text == last_chunk:
+                continue
+            last_chunk = text
+            buffer += text
+            full_answer += text
+
+            # 如果累积的缓冲区超过2000字符，截断并停止后续
+            if len(full_answer) > max_length:
+                # 只发送截断后的部分
+                remaining = max_length - (len(full_answer) - len(buffer))
+                if remaining > 0:
+                    yield buffer[:remaining]
+                yield "\n\n（回答过长已截断，如需完整信息请咨询医生）"
+                return
+
+            # 按句子或达到30字符发送
+            if len(buffer) > 30 or buffer.endswith(('。', '！', '？', '\n')):
+                yield buffer
+                buffer = ""
+
+    # 发送剩余的缓冲区内容
+    if buffer:
+        yield buffer
+
+    # 可选：发送结束标记（前端可据此处理）
+    # 无需额外发送
+
+# ============================================================
+# 非流式调用（保留，用于兼容）
+# ============================================================
+def call_llm(question):
+    """非流式版本，一次性返回完整答案（保留原有去重和长度限制）"""
+    mild_pattern = re.compile(
+        r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
+        re.IGNORECASE
+    )
+    if mild_pattern.search(question):
+        return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
+
+    try:
+        response = Application.call(
+            app_id=DASHSCOPE_APP_ID,
+            prompt=question,
+            api_key=DASHSCOPE_API_KEY,
+            workspace_id=DASHSCOPE_WORKSPACE_ID,
+            stream=True,
+            timeout=120
+        )
+        full_answer = ""
+        for chunk in response:
+            if chunk.output and chunk.output.text:
+                full_answer += chunk.output.text
+        if not full_answer:
+            full_answer = "抱歉，未能获取到有效回答。"
+    except Exception as e:
+        print(f"百炼应用调用失败: {e}")
+        return "抱歉，系统繁忙，请稍后再试。"
+
+    # 去重和长度限制（与原代码相同）
+    lines = full_answer.split('\n')
+    unique_lines = []
+    last_line = ""
+    for line in lines:
+        if line.strip() != last_line.strip():
+            unique_lines.append(line)
+            last_line = line
+    full_answer = '\n'.join(unique_lines)
+    if len(full_answer) > 2000:
+        full_answer = full_answer[:2000] + "...\n\n（回答过长已截断，如需完整信息请咨询医生）"
+    prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
+    full_answer = prefix_pattern.sub('', full_answer).strip()
+    emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
+    if full_answer and any(kw in full_answer for kw in emergency_keywords):
+        if mild_pattern.search(question):
+            return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                    "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
+    return full_answer if full_answer else "抱歉，模型未返回有效回答。"
 
 # ============================================================
 # Flask 路由
@@ -94,9 +158,21 @@ def switch_lang():
         return '', 200
     return jsonify({"status": "success"})
 
+@app.route('/api/stroke_qa', methods=['POST', 'OPTIONS'])
+def stroke_qa():
+    """非流式接口（保留兼容）"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    data = request.get_json(silent=True) or {}
+    question = data.get("question", "")
+    if not question:
+        return jsonify({"status": "error", "message": "问题不能为空"})
+    answer = call_llm(question)
+    return jsonify({"status": "success", "data": {"answer": answer}})
+
 @app.route('/api/stroke_qa_stream', methods=['POST', 'OPTIONS'])
 def stroke_qa_stream():
-    """流式问答接口"""
+    """流式接口（打字机效果）"""
     if request.method == 'OPTIONS':
         return '', 200
     data = request.get_json(silent=True) or {}
@@ -107,7 +183,7 @@ def stroke_qa_stream():
     def event_stream():
         for text_chunk in generate_stream(question):
             yield f"data: {json.dumps({'chunk': text_chunk})}\n\n"
-        yield f"data: {json.dumps({'chunk': None, 'done': True})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
 
     return Response(event_stream(), mimetype="text/event-stream")
 
@@ -692,15 +768,14 @@ async function send() {
     if (!text) return;
     addMsg("user", text);
     document.getElementById("input").value = "";
-
-    // 创建加载提示
+    
     const loadingDiv = document.createElement("div");
     loadingDiv.className = "message assistant loading-message";
     loadingDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
     const chatBody = document.getElementById("chatBody");
     chatBody.appendChild(loadingDiv);
     chatBody.scrollTop = chatBody.scrollHeight;
-
+    
     try {
         const response = await fetch("/api/stroke_qa_stream", {
             method: "POST",
@@ -708,7 +783,7 @@ async function send() {
             body: JSON.stringify({ question: text })
         });
         loadingDiv.remove();
-
+        
         // 创建助手消息容器
         const assistantMsgDiv = document.createElement("div");
         assistantMsgDiv.className = "message assistant";
@@ -716,7 +791,7 @@ async function send() {
         chatBody.appendChild(assistantMsgDiv);
         const bubble = assistantMsgDiv.querySelector(".msg-bubble");
         let fullText = "";
-
+        
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -736,7 +811,7 @@ async function send() {
                             bubble.innerHTML = fullText.replace(/\\n/g, '<br>');
                             chatBody.scrollTop = chatBody.scrollHeight;
                         } else if (data.done) {
-                            // 完成，可以不做额外处理
+                            // 流结束
                         }
                     } catch (e) { console.error(e); }
                 }
