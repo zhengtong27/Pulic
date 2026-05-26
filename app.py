@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, Response
 import re
 import os
+import json
+import time
 from openai import OpenAI
 
 app = Flask(__name__)
@@ -17,9 +19,9 @@ if DASHSCOPE_API_KEY:
     client = OpenAI(api_key=DASHSCOPE_API_KEY, base_url=DASHSCOPE_BASE_URL)
 else:
     client = None
-    print("错误：无法创建 OpenAI 客户端，请设置环境变量 DASHSCOPE_API_KEY")
+    print("错误：无法创建 OpenAI 客户端")
 
-MODEL_NAME = "qwen3-32b-351ed038aecc"   # 请根据实际情况修改
+MODEL_NAME = "qwen-max"   # 使用公开模型
 
 @app.after_request
 def add_headers(response):
@@ -29,40 +31,51 @@ def add_headers(response):
     response.headers['Cache-Control'] = 'no-cache'
     return response
 
-def call_llm(question):
+# 公共系统提示词（与之前相同）
+SYSTEM_PROMPT = (
+    "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
+    "【回答风格】\n"
+    "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁，直接给出建议或信息。\n\n"
+    "【重要限制】\n"
+    "1. 对于以下症状，绝对不要提及“脑卒中”、“中风”、“紧急就医”、“拨打120”等词汇，只需给予休息观察建议：\n"
+    "   - 轻微头痛、头晕、眼花、疲劳、乏力、颈部不适、失眠、焦虑、消化不良等\n"
+    "   - 回答示例：\n"
+    "     “头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。如果疼痛持续不缓解或加重，再咨询医生。”\n\n"
+    "2. 只有当用户明确描述以下至少一项脑卒中典型征兆时，才明确建议立即就医：\n"
+    "   - 一侧肢体突然无力或麻木\n"
+    "   - 口角歪斜、说话不清\n"
+    "   - 突发剧烈头痛（“像被雷劈一样”）\n"
+    "   - 单侧视力突然模糊或失明\n"
+    "   - 突然行走不稳、失去平衡\n\n"
+    "3. 对于所有其他健康问题，回答应通俗易懂，引用权威知识，但始终强调“本内容仅供参考，如有不适请及时就医”。\n\n"
+    "4. 绝不提供急救指导、药物剂量或替代医生诊断的建议。\n\n"
+    "5. 如果用户描述的症状不在上述列表中，请先询问是否有其他症状，并建议先休息观察，切勿自行套用脑卒中标准。"
+)
+
+# 非紧急症状过滤函数
+def is_mild_symptom(question):
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
     )
-    if mild_pattern.search(question):
-        return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
-                "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-    
-    system_prompt = (
-        "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
-        "【回答风格】\n"
-        "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁，直接给出建议或信息。\n\n"
-        "【重要限制】\n"
-        "1. 对于以下症状，绝对不要提及“脑卒中”、“中风”、“紧急就医”、“拨打120”等词汇，只需给予休息观察建议：\n"
-        "   - 轻微头痛、头晕、眼花、疲劳、乏力、颈部不适、失眠、焦虑、消化不良等\n"
-        "   - 回答示例：\n"
-        "     “头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。如果疼痛持续不缓解或加重，再咨询医生。”\n\n"
-        "2. 只有当用户明确描述以下至少一项脑卒中典型征兆时，才明确建议立即就医：\n"
-        "   - 一侧肢体突然无力或麻木\n"
-        "   - 口角歪斜、说话不清\n"
-        "   - 突发剧烈头痛（“像被雷劈一样”）\n"
-        "   - 单侧视力突然模糊或失明\n"
-        "   - 突然行走不稳、失去平衡\n\n"
-        "3. 对于所有其他健康问题，回答应通俗易懂，引用权威知识，但始终强调“本内容仅供参考，如有不适请及时就医”。\n\n"
-        "4. 绝不提供急救指导、药物剂量或替代医生诊断的建议。\n\n"
-        "5. 如果用户描述的症状不在上述列表中，请先询问是否有其他症状，并建议先休息观察，切勿自行套用脑卒中标准。"
-    )
-    
+    return bool(mild_pattern.search(question))
+
+# 流式生成器（用于 SSE）
+def generate_stream(question):
+    # 非紧急症状直接返回固定答案（分块模拟打字）
+    if is_mild_symptom(question):
+        fixed = ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
+        for i in range(0, len(fixed), 15):
+            yield fixed[i:i+15]
+            time.sleep(0.03)
+        return
+
     try:
         stream = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": question}
             ],
             extra_body={"enable_thinking": True},
@@ -71,37 +84,27 @@ def call_llm(question):
             max_tokens=1024,
             stream=True
         )
-        
-        full_answer = ""
-        reasoning_parts = []
-        
-        for chunk in stream:
-            if chunk.choices and len(chunk.choices) > 0:
-                delta = chunk.choices[0].delta
-                if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                    reasoning_parts.append(delta.reasoning_content)
-                if hasattr(delta, "content") and delta.content:
-                    full_answer += delta.content
-        
-        if reasoning_parts:
-            print(f"[思考过程] {''.join(reasoning_parts)}")
-        
-        prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
-        cleaned_answer = prefix_pattern.sub('', full_answer).strip()
-        if cleaned_answer:
-            full_answer = cleaned_answer
-        
-        emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
-        if full_answer and any(kw in full_answer for kw in emergency_keywords):
-            if mild_pattern.search(question):
-                return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
-                        "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-        
-        return full_answer.strip() if full_answer else "抱歉，模型未返回有效回答。"
-    
     except Exception as e:
-        print(f"模型调用失败: {e}")
-        return "抱歉，系统繁忙，请稍后再试。"
+        print(f"流式调用失败: {e}")
+        yield "抱歉，系统繁忙，请稍后再试。"
+        return
+
+    last_chunk = ""
+    buffer = ""
+    for chunk in stream:
+        if chunk.choices and len(chunk.choices) > 0:
+            delta = chunk.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                txt = delta.content
+                if txt == last_chunk:
+                    continue
+                last_chunk = txt
+                buffer += txt
+                if len(buffer) > 30 or buffer.endswith(('。', '！', '？', '\n')):
+                    yield buffer
+                    buffer = ""
+    if buffer:
+        yield buffer
 
 @app.route('/api/switch_lang', methods=['POST', 'OPTIONS'])
 def switch_lang():
@@ -109,16 +112,19 @@ def switch_lang():
         return '', 200
     return jsonify({"status": "success"})
 
-@app.route('/api/stroke_qa', methods=['POST', 'OPTIONS'])
-def stroke_qa():
+@app.route('/api/stroke_qa_stream', methods=['POST', 'OPTIONS'])
+def stroke_qa_stream():
     if request.method == 'OPTIONS':
         return '', 200
     data = request.get_json(silent=True) or {}
     question = data.get("question", "")
     if not question:
-        return jsonify({"status": "error", "message": "问题不能为空"})
-    answer = call_llm(question)
-    return jsonify({"status": "success", "data": {"answer": answer}})
+        return jsonify({"error": "问题为空"}), 400
+    def event_stream():
+        for chunk in generate_stream(question):
+            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+        yield "data: {\"done\": true}\n\n"
+    return Response(event_stream(), mimetype="text/event-stream")
 
 @app.route('/')
 def index():
@@ -460,6 +466,7 @@ def index():
             width: 100%;
             height: 100%;
             z-index: 98;
+            background: rgba(0,0,0,0.5);
             display: none;
         }
         .modal-mask.show {
@@ -576,7 +583,6 @@ def index():
 <div class="modal-mask" id="modalMask"></div>
 
 <script>
-// 全局变量
 let lang = "zh";
 let voiceEnabled = true;
 let fontOpt = "enlarge";
@@ -584,7 +590,6 @@ const synth = window.speechSynthesis;
 let recognition = null;
 let isRecording = false;
 
-// SVG头像
 const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
     <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
@@ -602,7 +607,6 @@ const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
 </svg>`;
 
-// 辅助函数
 function getEl(id) { return document.getElementById(id); }
 
 // 字体调节
@@ -742,17 +746,17 @@ async function switchLang() {
 }
 
 // 消息显示
-function addMsg(role, text) {
+function addMsg(role, text, isStreaming = false) {
     const body = getEl('chatBody');
     if (!body) return;
     const div = document.createElement('div');
     div.className = 'message ' + role;
     const avatar = role === 'user' ? patientAvatar : doctorAvatar;
-    // 修复正则表达式转义：在Python字符串中需要写成 \\* 才能输出 \*
     let cleaned = text.replace(/\\*\\*/g, '');
     div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleaned.replace(/\\n/g, '<br>')}</div>`;
     body.appendChild(div);
     body.scrollTop = body.scrollHeight;
+    return div;
 }
 function clearChat() {
     const body = getEl('chatBody');
@@ -761,7 +765,7 @@ function clearChat() {
     }
 }
 
-// 发送消息（调用非流式接口，稳定）
+// 流式发送消息
 async function send() {
     const inputEl = getEl('input');
     if (!inputEl) return;
@@ -778,16 +782,47 @@ async function send() {
     if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
     
     try {
-        const res = await fetch("/api/stroke_qa", {
+        const res = await fetch("/api/stroke_qa_stream", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ question: text })
         });
-        const data = await res.json();
-        const ans = data.data.answer;
         if (loadingDiv) loadingDiv.remove();
-        addMsg('assistant', ans);
-        speak(ans);
+        
+        // 创建助手消息容器，用于逐字追加
+        const assistantDiv = document.createElement('div');
+        assistantDiv.className = 'message assistant';
+        assistantDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
+        if (chatBody) chatBody.appendChild(assistantDiv);
+        const bubble = assistantDiv.querySelector('.msg-bubble');
+        let fullText = '';
+        
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const jsonStr = line.slice(6);
+                    try {
+                        const data = JSON.parse(jsonStr);
+                        if (data.chunk) {
+                            fullText += data.chunk;
+                            if (bubble) bubble.innerHTML = fullText.replace(/\\n/g, '<br>');
+                            if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
+                        } else if (data.done) {
+                            // 完成
+                        }
+                    } catch (e) { console.error(e); }
+                }
+            }
+        }
+        if (voiceEnabled && fullText) speak(fullText);
     } catch (err) {
         if (loadingDiv) loadingDiv.remove();
         addMsg('assistant', '抱歉，网络错误，请稍后再试。');
@@ -844,7 +879,6 @@ function quickAsk(question) {
     }
 })();
 
-// DOM 加载完成后绑定事件
 document.addEventListener('DOMContentLoaded', function() {
     console.log("DOM ready, binding events...");
     
@@ -869,7 +903,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.key === 'Enter') adjustFont();
     });
     
-    // 快捷提问按钮
     const questions = [
         '高血压怎么预防中风？',
         '中风后吃什么好？',
