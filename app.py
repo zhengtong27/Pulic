@@ -230,220 +230,306 @@ def index():
     <button class="send-btn" id="sendBtn">发送</button>
     <button class="send-btn clear-btn" id="clearBtn">清空</button>
 </div>
-<div class="modal-mask" id="modalMask" onclick="closeFontModal()"></div>
+<div class="modal-mask" id="modalMask"></div>
 
 <script>
-let lang = "zh", voiceEnabled = true, fontOpt = "enlarge", isRecording = false, activeRecognition = null, mediaStream = null;
-const synth = window.speechSynthesis;
-const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
-    <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
-    <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
-    <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
-    <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-    <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-    <rect x="8" y="28" width="28" height="12" rx="2" fill="#fff" stroke="#0077cc" stroke-width="1"/>
-</svg>`;
-const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
-    <circle cx="22" cy="22" r="20" fill="#f0f9ff" stroke="#5499c7" stroke-width="1"/>
-    <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
-    <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
-    <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-    <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
-    <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
-</svg>`;
+// 确保所有DOM元素加载完成后初始化
+document.addEventListener('DOMContentLoaded', function() {
+    console.log("DOM fully loaded");
 
-if(document.getElementById("input")) document.getElementById("input").removeAttribute("readonly");
-if(document.getElementById("input")) document.getElementById("input").removeAttribute("disabled");
+    // ========== 全局变量 ==========
+    window.lang = "zh";
+    window.voiceEnabled = true;
+    window.fontOpt = "enlarge";
+    window.isRecording = false;
+    window.activeRecognition = null;
+    window.mediaStream = null;
+    window.synth = window.speechSynthesis;
 
-function selectOpt(opt) {
-    fontOpt = opt;
-    let enlargeBtn = document.getElementById("enlargeBtn");
-    let narrowBtn = document.getElementById("narrowBtn");
-    if(enlargeBtn) enlargeBtn.className = opt==='enlarge'?'opt-btn active':'opt-btn';
-    if(narrowBtn) narrowBtn.className = opt==='narrow'?'opt-btn active':'opt-btn';
-    let si = document.getElementById("scaleInput");
-    if(si) {
-        if(opt==='enlarge'){ si.min=1; si.max=4; si.step=0.5; si.placeholder="1-4"; }
-        else{ si.min=0.3; si.max=1; si.step=0.1; si.placeholder="0.3-1"; }
-        si.value=""; si.focus();
+    // 头像 SVG
+    const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
+        <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
+        <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
+        <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
+        <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+        <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+        <rect x="8" y="28" width="28" height="12" rx="2" fill="#fff" stroke="#0077cc" stroke-width="1"/>
+    </svg>`;
+    const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
+        <circle cx="22" cy="22" r="20" fill="#f0f9ff" stroke="#5499c7" stroke-width="1"/>
+        <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
+        <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
+        <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+        <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+        <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
+    </svg>`;
+
+    // 获取DOM元素
+    const inputEl = document.getElementById('input');
+    const chatBody = document.getElementById('chatBody');
+    const fontBtn = document.getElementById('fontBtn');
+    const confirmFontBtn = document.getElementById('confirmFontBtn');
+    const enlargeBtn = document.getElementById('enlargeBtn');
+    const narrowBtn = document.getElementById('narrowBtn');
+    const langBtn = document.getElementById('langBtn');
+    const voiceBtn = document.getElementById('voiceBtn');
+    const micBtn = document.getElementById('micBtn');
+    const sendBtn = document.getElementById('sendBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const modalMask = document.getElementById('modalMask');
+    const fontModal = document.getElementById('fontModal');
+    const scaleInput = document.getElementById('scaleInput');
+
+    if (inputEl) {
+        inputEl.removeAttribute('readonly');
+        inputEl.removeAttribute('disabled');
     }
-}
-function adjustFont() {
-    let si = document.getElementById("scaleInput");
-    if(!si) return;
-    let v = parseFloat(si.value.trim());
-    if(isNaN(v)||v<=0) v=1;
-    if(fontOpt==='enlarge') v=Math.min(4,Math.max(1,v));
-    else v=Math.min(1,Math.max(0.3,v));
-    document.documentElement.style.setProperty('--font-scale', v);
-    si.value=v;
-    closeFontModal();
-}
-function openFontModal(){
-    let modal = document.getElementById("fontModal");
-    let mask = document.getElementById("modalMask");
-    if(modal) modal.classList.add('show');
-    if(mask) mask.classList.add('show');
-    let input = document.getElementById("scaleInput");
-    if(input) input.focus();
-}
-function closeFontModal(){
-    let modal = document.getElementById("fontModal");
-    let mask = document.getElementById("modalMask");
-    if(modal) modal.classList.remove('show');
-    if(mask) mask.classList.remove('show');
-    selectOpt('enlarge');
-    let input = document.getElementById("scaleInput");
-    if(input) input.value = '';
-}
 
-async function ensureMic() {
-    if(!window.SpeechRecognition && !window.webkitSpeechRecognition){ alert("不支持语音识别"); return false; }
-    if(mediaStream && mediaStream.active) return true;
-    try{ const s = await navigator.mediaDevices.getUserMedia({audio:true}); mediaStream=s; return true; }
-    catch(e){ alert("请允许麦克风权限"); return false; }
-}
-function startRecog(){
-    if(activeRecognition) activeRecognition.abort();
-    const Rec = window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!Rec) return;
-    const rec = new Rec();
-    rec.lang = lang==='zh'?'zh-CN':'en-US';
-    rec.interimResults=false;
-    rec.maxAlternatives=1;
-    rec.onstart=()=>{ isRecording=true; let btn = document.getElementById("micBtn"); if(btn) btn.classList.add('recording'); };
-    rec.onresult=(e)=>{ let input = document.getElementById("input"); if(input) input.value=e.results[0][0].transcript; rec.stop(); };
-    rec.onerror=()=>stopRec();
-    rec.onend=()=>stopRec();
-    try{ rec.start(); activeRecognition=rec; }catch(e){ alert("启动失败"); stopRec(); }
-}
-async function toggleRec(){
-    if(isRecording){ stopRec(); return; }
-    if(await ensureMic()) startRecog();
-}
-function stopRec(){
-    if(activeRecognition) activeRecognition.abort();
-    activeRecognition=null;
-    isRecording=false;
-    let btn = document.getElementById("micBtn");
-    if(btn) btn.classList.remove('recording');
-}
-window.addEventListener('beforeunload',()=>{ if(mediaStream) mediaStream.getTracks().forEach(t=>t.stop()); if(synth) synth.cancel(); });
+    // ========== 字体调节 ==========
+    function selectOpt(opt) {
+        window.fontOpt = opt;
+        if (enlargeBtn) enlargeBtn.className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
+        if (narrowBtn) narrowBtn.className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
+        if (scaleInput) {
+            if (opt === 'enlarge') {
+                scaleInput.min = 1;
+                scaleInput.max = 4;
+                scaleInput.step = 0.5;
+                scaleInput.placeholder = "1-4";
+            } else {
+                scaleInput.min = 0.3;
+                scaleInput.max = 1;
+                scaleInput.step = 0.1;
+                scaleInput.placeholder = "0.3-1";
+            }
+            scaleInput.value = "";
+            scaleInput.focus();
+        }
+    }
 
-function toggleVoice(){
-    voiceEnabled=!voiceEnabled;
-    let btn = document.getElementById("voiceBtn");
-    if(btn) btn.innerText="语音播报："+(voiceEnabled?"开":"关");
-    if(!voiceEnabled){ if(synth) synth.cancel(); }
-    else{ let last = document.querySelector('.message.assistant .msg-bubble:last-child'); if(last) speak(last.innerText); }
-}
-function getLastAssistantMessage(){ let msgs = document.querySelectorAll('.message.assistant .msg-bubble'); if(msgs.length) return msgs[msgs.length-1].innerText.trim(); return null; }
-function speak(t){ if(!voiceEnabled||!t) return; if(synth) synth.cancel(); let u=new SpeechSynthesisUtterance(t); u.lang=lang==='zh'?'zh-CN':'en-US'; if(synth) synth.speak(u); }
-async function switchLang(){
-    lang=lang==='zh'?'en':'zh';
-    await fetch('/api/switch_lang',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lang})}).catch(e=>console.log);
-    let btn = document.getElementById("langBtn");
-    if(btn) btn.innerText=lang==='zh'?'切换英文':'切换中文';
-    clearChat();
-}
-function addMsg(role, text){
-    let body=document.getElementById('chatBody');
-    if(!body) return;
-    let div=document.createElement('div');
-    div.className='message '+role;
-    let avatar=role==='user'?patientAvatar:doctorAvatar;
-    let clean=text.replace(/\\*\\*/g,'');
-    div.innerHTML=`<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${clean.replace(/\\n/g,'<br>')}</div>`;
-    body.appendChild(div);
-    body.scrollTop=body.scrollHeight;
-}
-function clearChat(){
-    let body=document.getElementById('chatBody');
-    if(body) body.innerHTML=`<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang==='zh'?'你好！我是脑卒中智能助手~':'Hello! I'm stroke assistant~'}</div></div>`;
-}
-async function send(){
-    let input = document.getElementById("input");
-    if(!input) return;
-    let text = input.value.trim();
-    if(!text) return;
-    addMsg('user',text);
-    input.value='';
-    let loading=document.createElement('div');
-    loading.className='message assistant loading-message';
-    loading.innerHTML=`<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
-    let chatBody=document.getElementById('chatBody');
-    if(chatBody) chatBody.appendChild(loading);
-    if(chatBody) chatBody.scrollTop=chatBody.scrollHeight;
-    try{
-        let resp=await fetch('/api/stroke_qa_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:text})});
-        if(loading) loading.remove();
-        let assistantDiv=document.createElement('div');
-        assistantDiv.className='message assistant';
-        assistantDiv.innerHTML=`<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
-        if(chatBody) chatBody.appendChild(assistantDiv);
-        let bubble=assistantDiv.querySelector('.msg-bubble');
-        let full='';
-        let reader=resp.body.getReader();
-        let decoder=new TextDecoder();
-        let buffer='';
-        while(true){
-            let {done,value}=await reader.read();
-            if(done) break;
-            buffer+=decoder.decode(value,{stream:true});
-            let lines=buffer.split('\n\n');
-            buffer=lines.pop();
-            for(let line of lines){
-                if(line.startsWith('data: ')){
-                    let json=line.slice(6);
-                    try{
-                        let data=JSON.parse(json);
-                        if(data.chunk){
-                            full+=data.chunk;
-                            if(bubble) bubble.innerHTML=full.replace(/\\n/g,'<br>');
-                            if(chatBody) chatBody.scrollTop=chatBody.scrollHeight;
-                        }else if(data.done){}
-                    }catch(e){}
+    function adjustFont() {
+        if (!scaleInput) return;
+        let v = parseFloat(scaleInput.value.trim());
+        if (isNaN(v) || v <= 0) v = 1;
+        if (window.fontOpt === 'enlarge') {
+            v = Math.min(4, Math.max(1, v));
+        } else {
+            v = Math.min(1, Math.max(0.3, v));
+        }
+        document.documentElement.style.setProperty('--font-scale', v);
+        scaleInput.value = v;
+        closeFontModal();
+    }
+
+    function openFontModal() {
+        if (fontModal) fontModal.classList.add('show');
+        if (modalMask) modalMask.classList.add('show');
+        if (scaleInput) scaleInput.focus();
+    }
+
+    function closeFontModal() {
+        if (fontModal) fontModal.classList.remove('show');
+        if (modalMask) modalMask.classList.remove('show');
+        selectOpt('enlarge');
+        if (scaleInput) scaleInput.value = '';
+    }
+
+    if (fontBtn) fontBtn.onclick = openFontModal;
+    if (confirmFontBtn) confirmFontBtn.onclick = adjustFont;
+    if (enlargeBtn) enlargeBtn.onclick = () => selectOpt('enlarge');
+    if (narrowBtn) narrowBtn.onclick = () => selectOpt('narrow');
+
+    // ========== 语音播报 ==========
+    function toggleVoice() {
+        window.voiceEnabled = !window.voiceEnabled;
+        if (voiceBtn) voiceBtn.innerText = "语音播报：" + (window.voiceEnabled ? "开" : "关");
+        if (!window.voiceEnabled) {
+            if (window.synth) window.synth.cancel();
+        } else {
+            let lastMsg = getLastAssistantMessage();
+            if (lastMsg) speak(lastMsg);
+        }
+    }
+    function getLastAssistantMessage() {
+        let msgs = document.querySelectorAll('.message.assistant .msg-bubble');
+        if (msgs.length) return msgs[msgs.length-1].innerText.trim();
+        return null;
+    }
+    function speak(t) {
+        if (!window.voiceEnabled || !t) return;
+        if (window.synth) window.synth.cancel();
+        let u = new SpeechSynthesisUtterance(t);
+        u.lang = window.lang === 'zh' ? 'zh-CN' : 'en-US';
+        window.synth.speak(u);
+    }
+    if (voiceBtn) voiceBtn.onclick = toggleVoice;
+
+    // ========== 中英文切换 ==========
+    async function switchLang() {
+        window.lang = window.lang === 'zh' ? 'en' : 'zh';
+        try {
+            await fetch('/api/switch_lang', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({lang: window.lang})
+            });
+        } catch(e) { console.log(e); }
+        if (langBtn) langBtn.innerText = window.lang === 'zh' ? '切换英文' : '切换中文';
+        clearChat();
+    }
+    if (langBtn) langBtn.onclick = switchLang;
+
+    // ========== 语音输入 ==========
+    async function ensureMic() {
+        if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+            alert("不支持语音识别");
+            return false;
+        }
+        if (window.mediaStream && window.mediaStream.active) return true;
+        try {
+            const s = await navigator.mediaDevices.getUserMedia({audio: true});
+            window.mediaStream = s;
+            return true;
+        } catch(e) {
+            alert("请允许麦克风权限");
+            return false;
+        }
+    }
+    function startRecog() {
+        if (window.activeRecognition) window.activeRecognition.abort();
+        const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!Rec) return;
+        const rec = new Rec();
+        rec.lang = window.lang === 'zh' ? 'zh-CN' : 'en-US';
+        rec.interimResults = false;
+        rec.maxAlternatives = 1;
+        rec.onstart = () => {
+            window.isRecording = true;
+            if (micBtn) micBtn.classList.add('recording');
+        };
+        rec.onresult = (e) => {
+            if (inputEl) inputEl.value = e.results[0][0].transcript;
+            rec.stop();
+        };
+        rec.onerror = () => stopRec();
+        rec.onend = () => stopRec();
+        try {
+            rec.start();
+            window.activeRecognition = rec;
+        } catch(e) {
+            alert("启动失败");
+            stopRec();
+        }
+    }
+    async function toggleRec() {
+        if (window.isRecording) {
+            stopRec();
+            return;
+        }
+        if (await ensureMic()) startRecog();
+    }
+    function stopRec() {
+        if (window.activeRecognition) window.activeRecognition.abort();
+        window.activeRecognition = null;
+        window.isRecording = false;
+        if (micBtn) micBtn.classList.remove('recording');
+    }
+    window.addEventListener('beforeunload', () => {
+        if (window.mediaStream) window.mediaStream.getTracks().forEach(t => t.stop());
+        if (window.synth) window.synth.cancel();
+    });
+    if (micBtn) micBtn.onclick = toggleRec;
+
+    // ========== 发送消息 ==========
+    function addMsg(role, text) {
+        if (!chatBody) return;
+        let div = document.createElement('div');
+        div.className = 'message ' + role;
+        let avatar = role === 'user' ? patientAvatar : doctorAvatar;
+        let clean = text.replace(/\*\*/g, '');
+        div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${clean.replace(/\n/g, '<br>')}</div>`;
+        chatBody.appendChild(div);
+        chatBody.scrollTop = chatBody.scrollHeight;
+    }
+    function clearChat() {
+        if (chatBody) {
+            chatBody.innerHTML = `<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${window.lang === 'zh' ? '你好！我是脑卒中智能助手~' : 'Hello! I\'m stroke assistant~'}</div></div>`;
+        }
+    }
+    async function send() {
+        if (!inputEl) return;
+        let text = inputEl.value.trim();
+        if (!text) return;
+        addMsg('user', text);
+        inputEl.value = '';
+        let loading = document.createElement('div');
+        loading.className = 'message assistant loading-message';
+        loading.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
+        if (chatBody) chatBody.appendChild(loading);
+        if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
+        try {
+            let resp = await fetch('/api/stroke_qa_stream', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({question: text})
+            });
+            if (loading) loading.remove();
+            let assistantDiv = document.createElement('div');
+            assistantDiv.className = 'message assistant';
+            assistantDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
+            if (chatBody) chatBody.appendChild(assistantDiv);
+            let bubble = assistantDiv.querySelector('.msg-bubble');
+            let full = '';
+            let reader = resp.body.getReader();
+            let decoder = new TextDecoder();
+            let buffer = '';
+            while (true) {
+                let {done, value} = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, {stream: true});
+                let lines = buffer.split('\n\n');
+                buffer = lines.pop();
+                for (let line of lines) {
+                    if (line.startsWith('data: ')) {
+                        let jsonStr = line.slice(6);
+                        try {
+                            let data = JSON.parse(jsonStr);
+                            if (data.chunk) {
+                                full += data.chunk;
+                                if (bubble) bubble.innerHTML = full.replace(/\n/g, '<br>');
+                                if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
+                            }
+                        } catch(e) {}
+                    }
                 }
             }
+            if (window.voiceEnabled && full) speak(full);
+        } catch(e) {
+            if (loading) loading.remove();
+            addMsg('assistant', '抱歉，网络错误，请稍后再试。');
+            console.error(e);
         }
-        if(voiceEnabled && full) speak(full);
-    }catch(e){
-        if(loading) loading.remove();
-        addMsg('assistant','抱歉，网络错误，请稍后再试。');
-        console.error(e);
     }
-}
-function quickAsk(q){ let input=document.getElementById("input"); if(input) input.value=q; send(); }
+    if (sendBtn) sendBtn.onclick = send;
+    if (clearBtn) clearBtn.onclick = clearChat;
+    if (inputEl) {
+        inputEl.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                send();
+            }
+        };
+    }
+    if (modalMask) modalMask.onclick = closeFontModal;
+    if (fontModal) fontModal.onclick = (e) => e.stopPropagation();
+    if (scaleInput) scaleInput.onkeydown = (e) => { if (e.key === 'Enter') adjustFont(); };
 
-document.addEventListener('DOMContentLoaded',()=>{
-    let fontBtn = document.getElementById("fontBtn");
-    if(fontBtn) fontBtn.onclick = openFontModal;
-    let confirmBtn = document.getElementById("confirmFontBtn");
-    if(confirmBtn) confirmBtn.onclick = adjustFont;
-    let enlargeBtn = document.getElementById("enlargeBtn");
-    if(enlargeBtn) enlargeBtn.onclick = ()=>selectOpt('enlarge');
-    let narrowBtn = document.getElementById("narrowBtn");
-    if(narrowBtn) narrowBtn.onclick = ()=>selectOpt('narrow');
-    let langBtn = document.getElementById("langBtn");
-    if(langBtn) langBtn.onclick = switchLang;
-    let voiceBtn = document.getElementById("voiceBtn");
-    if(voiceBtn) voiceBtn.onclick = toggleVoice;
-    let micBtn = document.getElementById("micBtn");
-    if(micBtn) micBtn.onclick = toggleRec;
-    let sendBtn = document.getElementById("sendBtn");
-    if(sendBtn) sendBtn.onclick = send;
-    let clearBtn = document.getElementById("clearBtn");
-    if(clearBtn) clearBtn.onclick = clearChat;
-    let input = document.getElementById("input");
-    if(input) input.onkeydown = e => { if(e.key==='Enter'){ e.preventDefault(); send(); } };
-    let modalMask = document.getElementById("modalMask");
-    if(modalMask) modalMask.onclick = closeFontModal;
-    let fontModal = document.getElementById("fontModal");
-    if(fontModal) fontModal.onclick = e => e.stopPropagation();
-    let scaleInput = document.getElementById("scaleInput");
-    if(scaleInput) scaleInput.onkeydown = e => { if(e.key==='Enter') adjustFont(); };
-    if(input) input.removeAttribute("readonly");
-    if(input) input.removeAttribute("disabled");
+    window.quickAsk = function(q) {
+        if (inputEl) inputEl.value = q;
+        send();
+    };
+
+    console.log("All event listeners attached");
 });
 </script>
 </body>
