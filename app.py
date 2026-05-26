@@ -65,7 +65,7 @@ def retrieve_from_knowledge_base(question, top_k=3):
 # 大模型调用函数（集成 RAG 检索）
 # ============================================================
 def call_llm(question):
-    # 1. 非紧急症状过滤（保持原有安全逻辑）
+    # 1. 非紧急症状过滤（保持不变）
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
@@ -74,33 +74,38 @@ def call_llm(question):
         return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
 
-    # 2. 调用百炼 RAG 应用（自动检索知识库并生成回答）
+    # 2. 调用百炼 RAG 应用（启用流式输出 + 更长超时）
     try:
         response = Application.call(
-            app_id=os.environ.get("DASHSCOPE_APP_ID"),      # 在 Render 环境变量中设置
+            app_id=os.environ.get("DASHSCOPE_APP_ID"),
             prompt=question,
             api_key=os.environ.get("DASHSCOPE_API_KEY"),
-            workspace_id=os.environ.get("DASHSCOPE_WORKSPACE_ID")  # 可选，如果知识库在非默认业务空间则需要
+            workspace_id=os.environ.get("DASHSCOPE_WORKSPACE_ID"),
+            stream=True,          # 开启流式输出
+            timeout=120           # 增加读取超时到 120 秒
         )
-        # 提取回答内容
-        full_answer = response.output.text if response and response.output else "抱歉，未能获取到有效回答。"
-
+        # 收集流式响应
+        full_answer = ""
+        for chunk in response:
+            if chunk.output and chunk.output.text:
+                full_answer += chunk.output.text
+        if not full_answer:
+            full_answer = "抱歉，未能获取到有效回答。"
     except Exception as e:
         print(f"百炼应用调用失败: {e}")
         return "抱歉，系统繁忙，请稍后再试。"
 
-    # 3. 后处理：去除常见的肯定性开头短语
+    # 3. 后处理（去除“您说得对”等开头）
     prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
     full_answer = prefix_pattern.sub('', full_answer).strip()
 
-    # 4. 二次安全过滤：如果模型错误地输出了紧急关键词，且问题属于非紧急，则覆盖回答
+    # 4. 二次安全过滤
     emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
     if full_answer and any(kw in full_answer for kw in emergency_keywords):
         if mild_pattern.search(question):
             return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                     "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
     return full_answer if full_answer else "抱歉，模型未返回有效回答。"
-
 # ============================================================
 # Flask 路由
 # ============================================================
