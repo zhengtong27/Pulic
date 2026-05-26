@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, Response
 import re
 import os
+import json
+import time
 from openai import OpenAI
 
 app = Flask(__name__)
@@ -27,15 +29,19 @@ def add_headers(response):
     response.headers['Cache-Control'] = 'no-cache'
     return response
 
-def call_llm(question):
+def generate_stream(question):
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
     )
     if mild_pattern.search(question):
-        return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
-                "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-    
+        fixed = ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
+        for i in range(0, len(fixed), 15):
+            yield fixed[i:i+15]
+            time.sleep(0.03)
+        return
+
     system_prompt = (
         "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
         "【回答风格】\n"
@@ -55,9 +61,9 @@ def call_llm(question):
         "4. 绝不提供急救指导、药物剂量或替代医生诊断的建议。\n\n"
         "5. 如果用户描述的症状不在上述列表中，请先询问是否有其他症状，并建议先休息观察，切勿自行套用脑卒中标准。"
     )
-    
+
     try:
-        response = client.chat.completions.create(
+        stream = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -67,49 +73,47 @@ def call_llm(question):
             temperature=0.3,
             top_p=0.85,
             max_tokens=1024,
-            stream=False
+            stream=True
         )
-        full_answer = response.choices[0].message.content
     except Exception as e:
-        print(f"模型调用失败: {e}")
-        return "抱歉，系统繁忙，请稍后再试。"
-    
-    # 去重和清理
-    lines = full_answer.split('\n')
-    unique_lines = []
-    last_line = ""
-    for line in lines:
-        if line.strip() != last_line.strip():
-            unique_lines.append(line)
-            last_line = line
-    full_answer = '\n'.join(unique_lines)
-    if len(full_answer) > 2000:
-        full_answer = full_answer[:2000] + "...\n\n（回答过长已截断）"
-    prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
-    full_answer = prefix_pattern.sub('', full_answer).strip()
-    emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
-    if full_answer and any(kw in full_answer for kw in emergency_keywords):
-        if mild_pattern.search(question):
-            return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
-                    "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-    return full_answer if full_answer else "抱歉，模型未返回有效回答。"
+        print(e)
+        yield "抱歉，系统繁忙，请稍后再试。"
+        return
+
+    last = ""
+    buf = ""
+    for chunk in stream:
+        if chunk.choices and len(chunk.choices) > 0:
+            delta = chunk.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                txt = delta.content
+                if txt == last:
+                    continue
+                last = txt
+                buf += txt
+                if len(buf) > 30 or buf.endswith(('。', '！', '？', '\n')):
+                    yield buf
+                    buf = ""
+    if buf:
+        yield buf
+
+@app.route('/api/stream', methods=['POST'])
+def stream():
+    data = request.get_json() or {}
+    q = data.get("question", "")
+    if not q:
+        return jsonify({"error": "问题为空"}), 400
+    def gen():
+        for chunk in generate_stream(q):
+            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+        yield "data: {\"done\": true}\n\n"
+    return Response(gen(), mimetype="text/event-stream")
 
 @app.route('/api/switch_lang', methods=['POST', 'OPTIONS'])
 def switch_lang():
     if request.method == 'OPTIONS':
         return '', 200
     return jsonify({"status": "success"})
-
-@app.route('/api/stroke_qa', methods=['POST', 'OPTIONS'])
-def stroke_qa():
-    if request.method == 'OPTIONS':
-        return '', 200
-    data = request.get_json(silent=True) or {}
-    question = data.get("question", "")
-    if not question:
-        return jsonify({"status": "error", "message": "问题不能为空"})
-    answer = call_llm(question)
-    return jsonify({"status": "success", "data": {"answer": answer}})
 
 @app.route('/')
 def index():
