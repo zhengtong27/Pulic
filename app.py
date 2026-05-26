@@ -332,9 +332,6 @@ def index():
             scrollbar-width: thin;
             -webkit-overflow-scrolling: touch;
         }
-        .quick-questions::-webkit-scrollbar {
-            height: 4px;
-        }
         .quick-questions button {
             background: #eef3fc;
             border: 1px solid #cce4f5;
@@ -587,7 +584,7 @@ const synth = window.speechSynthesis;
 let recognition = null;
 let isRecording = false;
 
-// SVG头像（完整）
+// SVG头像
 const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
     <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
@@ -605,9 +602,8 @@ const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
 </svg>`;
 
-// 获取DOM元素
+// 辅助函数
 function getEl(id) { return document.getElementById(id); }
-function qs(sel) { return document.querySelector(sel); }
 
 // 字体调节
 function selectOpt(opt) {
@@ -752,8 +748,9 @@ function addMsg(role, text) {
     const div = document.createElement('div');
     div.className = 'message ' + role;
     const avatar = role === 'user' ? patientAvatar : doctorAvatar;
-    let cleaned = text.replace(/\*\*/g, '');
-    div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleaned.replace(/\n/g, '<br>')}</div>`;
+    // 修复正则表达式转义：在Python字符串中需要写成 \\* 才能输出 \*
+    let cleaned = text.replace(/\\*\\*/g, '');
+    div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleaned.replace(/\\n/g, '<br>')}</div>`;
     body.appendChild(div);
     body.scrollTop = body.scrollHeight;
 }
@@ -764,7 +761,7 @@ function clearChat() {
     }
 }
 
-// 发送消息（调用非流式接口）
+// 发送消息（调用非流式接口，稳定）
 async function send() {
     const inputEl = getEl('input');
     if (!inputEl) return;
@@ -847,11 +844,10 @@ function quickAsk(question) {
     }
 })();
 
-// 在DOM加载完成后绑定所有事件
+// DOM 加载完成后绑定事件
 document.addEventListener('DOMContentLoaded', function() {
     console.log("DOM ready, binding events...");
     
-    // 绑定按钮事件
     getEl('sendBtn')?.addEventListener('click', send);
     getEl('clearBtn')?.addEventListener('click', clearChat);
     getEl('langBtn')?.addEventListener('click', switchLang);
@@ -893,14 +889,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 确保输入框可编辑
     const inputEl = getEl('input');
     if (inputEl) {
         inputEl.removeAttribute('readonly');
         inputEl.removeAttribute('disabled');
     }
     
-    console.log("All events bound successfully.");
+    console.log("All events bound.");
 });
 </script>
 </body>
