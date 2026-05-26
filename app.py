@@ -4,6 +4,7 @@ import re
 import os
 from openai import OpenAI
 from dashscope import Retrieval
+from dashscope import Application
 
 app = Flask(__name__)
 
@@ -74,70 +75,32 @@ def call_llm(question):
         return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
 
-    # 2. RAG 检索：从知识库中获取相关内容
-    retrieved_docs = retrieve_from_knowledge_base(question, top_k=3)
-    context = "\n\n".join(retrieved_docs) if retrieved_docs else ""
-    if context:
-        print(f"[RAG] 检索到 {len(retrieved_docs)} 个文档片段")
-
-    # 3. 构建系统提示词（融入检索到的参考资料）
-    system_prompt = (
-        "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
-        "【回答风格】\n"
-        "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁，直接给出建议或信息。\n\n"
-    )
-    if context:
-        system_prompt += (
-            f"【参考资料】\n{context}\n\n"
-            "请优先使用上述参考资料回答用户问题。如果资料中没有相关信息，请根据自己的知识回答。\n\n"
-        )
-    system_prompt += (
-        "【重要限制】\n"
-        "1. 对于以下症状，绝对不要提及“脑卒中”、“中风”、“紧急就医”、“拨打120”等词汇，只需给予休息观察建议：\n"
-        "   - 轻微头痛、头晕、眼花、疲劳、乏力、颈部不适、失眠、焦虑、消化不良等\n"
-        "   - 回答示例：\n"
-        "     “头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。如果疼痛持续不缓解或加重，再咨询医生。”\n\n"
-        "2. 只有当用户明确描述以下至少一项脑卒中典型征兆时，才明确建议立即就医：\n"
-        "   - 一侧肢体突然无力或麻木\n"
-        "   - 口角歪斜、说话不清\n"
-        "   - 突发剧烈头痛（“像被雷劈一样”）\n"
-        "   - 单侧视力突然模糊或失明\n"
-        "   - 突然行走不稳、失去平衡\n\n"
-        "3. 对于所有其他健康问题，回答应通俗易懂，引用权威知识，但始终强调“本内容仅供参考，如有不适请及时就医”。\n\n"
-        "4. 绝不提供急救指导、药物剂量或替代医生诊断的建议。\n\n"
-        "5. 如果用户描述的症状不在上述列表中，请先询问是否有其他症状，并建议先休息观察，切勿自行套用脑卒中标准。"
-    )
-
-    # 4. 调用大模型生成回答
+    # 2. 调用百炼 RAG 应用（自动检索知识库并生成回答）
     try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question}
-            ],
-            temperature=0.3,
-            top_p=0.85,
-            max_tokens=1024,
-            stream=False   # 非流式，更稳定
+        response = Application.call(
+            app_id=os.environ.get("DASHSCOPE_APP_ID"),      # 在 Render 环境变量中设置
+            prompt=question,
+            api_key=os.environ.get("DASHSCOPE_API_KEY"),
+            workspace_id=os.environ.get("DASHSCOPE_WORKSPACE_ID")  # 可选，如果知识库在非默认业务空间则需要
         )
-        full_answer = response.choices[0].message.content
-
-        # 后处理：去除常见的肯定性开头短语
-        prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
-        full_answer = prefix_pattern.sub('', full_answer).strip()
-
-        # 二次安全过滤：如果模型错误地输出了紧急关键词，且问题属于非紧急，则覆盖回答
-        emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
-        if full_answer and any(kw in full_answer for kw in emergency_keywords):
-            if mild_pattern.search(question):
-                return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
-                        "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-        return full_answer if full_answer else "抱歉，模型未返回有效回答。"
+        # 提取回答内容
+        full_answer = response.output.text if response and response.output else "抱歉，未能获取到有效回答。"
 
     except Exception as e:
-        print(f"模型调用失败: {e}")
+        print(f"百炼应用调用失败: {e}")
         return "抱歉，系统繁忙，请稍后再试。"
+
+    # 3. 后处理：去除常见的肯定性开头短语
+    prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
+    full_answer = prefix_pattern.sub('', full_answer).strip()
+
+    # 4. 二次安全过滤：如果模型错误地输出了紧急关键词，且问题属于非紧急，则覆盖回答
+    emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
+    if full_answer and any(kw in full_answer for kw in emergency_keywords):
+        if mild_pattern.search(question):
+            return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                    "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
+    return full_answer if full_answer else "抱歉，模型未返回有效回答。"
 
 # ============================================================
 # Flask 路由
