@@ -25,7 +25,7 @@ if not DASHSCOPE_APP_ID:
 # ============================================================
 def generate_stream(question):
     """生成流式响应，逐块返回答案片段"""
-    # 1. 非紧急症状过滤（若命中，直接返回固定文本流）
+    # 1. 非紧急症状过滤
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
@@ -56,30 +56,22 @@ def generate_stream(question):
         # 用于去重的缓冲区
         last_chunk = ""
         buffer = ""
-        full_answer = ""
 
         for chunk in response:
             if chunk.output and chunk.output.text:
                 text = chunk.output.text
-                # 若连续两块内容完全相同，跳过（防止重复）
                 if text == last_chunk:
                     continue
                 last_chunk = text
                 buffer += text
-                full_answer += text
 
-                # 按句子或达到一定长度就发送（模拟实时显示）
+                # 按句子或达到一定长度就发送
                 if len(buffer) > 30 or buffer.endswith(('。', '！', '？', '\n')):
                     yield buffer
                     buffer = ""
 
-        # 发送剩余的缓冲区内容
         if buffer:
             yield buffer
-
-        # 后处理：去除连续重复的句子（整体去重）
-        # 注意：这里不再修改已经发出的内容，但可以在最后发送一个去重后的完整版本？不必要。
-        # 但为了最终存储，可以记录完整答案，但前端已经逐块显示了，无需额外操作。
 
     except Exception as e:
         print(f"百炼应用调用失败: {e}")
@@ -113,9 +105,7 @@ def stroke_qa_stream():
         return jsonify({"status": "error", "message": "问题不能为空"}), 400
 
     def event_stream():
-        # 生成器，产生 SSE 格式的数据
         for text_chunk in generate_stream(question):
-            # 将每个文本块作为 SSE 消息发送
             yield f"data: {json.dumps({'chunk': text_chunk})}\n\n"
         yield f"data: {json.dumps({'chunk': None, 'done': True})}\n\n"
 
@@ -494,41 +484,216 @@ let isRecording = false;
 let activeRecognition = null;
 let mediaStream = null;
 
-// 头像 SVG 常量（与之前相同，从略）
-const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">...</svg>`;
-const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">...</svg>`;
+const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
+    <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
+    <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
+    <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
+    <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+    <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+    <rect x="8" y="28" width="28" height="12" rx="2" fill="#fff" stroke="#0077cc" stroke-width="1"/>
+</svg>`;
+const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
+    <circle cx="22" cy="22" r="20" fill="#f0f9ff" stroke="#5499c7" stroke-width="1"/>
+    <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
+    <rect x="12" y="10" width="20" height="6" rx="1" fill="#2c3e50"/>
+    <circle cx="17" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+    <circle cx="27" cy="18" r="1.5" fill="#fff" stroke="#2c3e50" stroke-width="1"/>
+    <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
+</svg>`;
 
-// 确保输入框可编辑
 var inputElement = document.getElementById("input");
 if (inputElement) {
     inputElement.removeAttribute("readonly");
     inputElement.removeAttribute("disabled");
 }
 
-function selectOpt(opt) { /* 与之前相同，省略 */ }
-function adjustFont() { /* 与之前相同，省略 */ }
-function openFontModal() { /* 与之前相同，省略 */ }
-function closeFontModal() { /* 与之前相同，省略 */ }
+function selectOpt(opt) {
+    fontOpt = opt;
+    document.getElementById('enlargeBtn').className = opt === 'enlarge' ? 'opt-btn active' : 'opt-btn';
+    document.getElementById('narrowBtn').className = opt === 'narrow' ? 'opt-btn active' : 'opt-btn';
+    const scaleInput = document.getElementById('scaleInput');
+    if (opt === 'enlarge') {
+        scaleInput.min = 1;
+        scaleInput.max = 4;
+        scaleInput.step = 0.5;
+        scaleInput.placeholder = "放大倍数（1-4）";
+    } else {
+        scaleInput.min = 0.3;
+        scaleInput.max = 1;
+        scaleInput.step = 0.1;
+        scaleInput.placeholder = "缩小倍数（0.3-1）";
+    }
+    scaleInput.value = "";
+    scaleInput.focus();
+}
 
-// 语音相关函数（与之前相同，略）
-async function ensureMicrophonePermission() { /* ... */ }
-function startRecognition() { /* ... */ }
-async function toggleRec() { /* ... */ }
-function stopRec() { /* ... */ }
-window.addEventListener('beforeunload', function() { /* ... */ });
-function toggleVoice() { /* ... */ }
-function getLastAssistantMessage() { /* ... */ }
-function speak(text) { /* ... */ }
-async function switchLang() { /* ... */ }
+function adjustFont() {
+    const scaleInput = document.getElementById('scaleInput');
+    let rawValue = scaleInput.value.trim();
+    let scale = parseFloat(rawValue);
+    if (isNaN(scale) || scale <= 0) scale = 1;
+    if (fontOpt === 'enlarge') {
+        scale = Math.min(4, Math.max(1, scale));
+    } else {
+        scale = Math.min(1, Math.max(0.3, scale));
+    }
+    document.documentElement.style.setProperty('--font-scale', scale);
+    scaleInput.value = scale;
+    closeFontModal();
+}
 
-// 核心：流式发送与接收
+function openFontModal() {
+    document.getElementById('fontModal').classList.add('show');
+    document.getElementById('modalMask').classList.add('show');
+    document.getElementById('scaleInput').focus();
+}
+
+function closeFontModal() {
+    document.getElementById('fontModal').classList.remove('show');
+    document.getElementById('modalMask').classList.remove('show');
+    selectOpt('enlarge');
+    document.getElementById('scaleInput').value = '';
+}
+
+async function ensureMicrophonePermission() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        alert("您的浏览器不支持语音识别，请使用文字输入。");
+        return false;
+    }
+    if (mediaStream && mediaStream.active) return true;
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStream = stream;
+        return true;
+    } catch (err) {
+        console.error("麦克风授权失败:", err);
+        if (err.name === 'NotAllowedError') {
+            alert("无法获取麦克风权限。请点击地址栏左侧锁图标 → 网站设置 → 麦克风 → 选择“允许”，然后刷新页面。");
+        } else if (err.name === 'NotFoundError') {
+            alert("未检测到麦克风设备，请检查耳机或麦克风连接。");
+        } else {
+            alert("麦克风授权申请失败: " + err.message);
+        }
+        return false;
+    }
+}
+
+function startRecognition() {
+    if (activeRecognition) {
+        try { activeRecognition.abort(); } catch(e) {}
+        activeRecognition = null;
+    }
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const recognition = new SpeechRecognition();
+    recognition.lang = lang === "zh" ? "zh-CN" : "en-US";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => {
+        isRecording = true;
+        document.getElementById("micBtn")?.classList.add("recording");
+    };
+    recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        document.getElementById("input").value = transcript;
+        if (activeRecognition) activeRecognition.stop();
+    };
+    recognition.onerror = (event) => {
+        console.error("语音识别错误:", event.error);
+        if (event.error === 'not-allowed') {
+            alert("麦克风权限不足，请刷新页面后重新授权。");
+        } else if (event.error !== 'aborted' && event.error !== 'no-speech') {
+            alert(`语音识别出错: ${event.error}`);
+        }
+        stopRec();
+    };
+    recognition.onend = () => stopRec();
+    try {
+        recognition.start();
+        activeRecognition = recognition;
+    } catch (err) {
+        console.error("启动语音识别异常:", err);
+        alert("启动语音识别失败: " + err.message);
+        stopRec();
+    }
+}
+
+async function toggleRec() {
+    if (isRecording) {
+        stopRec();
+        return;
+    }
+    const granted = await ensureMicrophonePermission();
+    if (!granted) return;
+    startRecognition();
+}
+
+function stopRec() {
+    if (activeRecognition) {
+        try { activeRecognition.abort(); } catch(e) {}
+        activeRecognition = null;
+    }
+    isRecording = false;
+    document.getElementById("micBtn")?.classList.remove("recording");
+}
+
+window.addEventListener('beforeunload', function() {
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+    }
+    if (synth) synth.cancel();
+});
+
+function toggleVoice() {
+    voiceEnabled = !voiceEnabled;
+    document.getElementById("voiceBtn").innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
+    if (!voiceEnabled) {
+        if (synth) synth.cancel();
+    } else {
+        const lastMsg = getLastAssistantMessage();
+        if (lastMsg) speak(lastMsg);
+    }
+}
+
+function getLastAssistantMessage() {
+    const messages = document.querySelectorAll('.message.assistant .msg-bubble');
+    if (messages.length === 0) return null;
+    const lastBubble = messages[messages.length - 1];
+    return lastBubble.innerText.trim();
+}
+
+function speak(text) {
+    if (!voiceEnabled) return;
+    if (!text) return;
+    if (synth) synth.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = lang === "zh" ? "zh-CN" : "en-US";
+    utterance.onerror = (e) => console.error("语音播报失败:", e);
+    synth.speak(utterance);
+}
+
+async function switchLang() {
+    lang = lang === "zh" ? "en" : "zh";
+    try {
+        await fetch("/api/switch_lang", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lang })
+        });
+    } catch(e) { console.error("语言切换API调用失败", e); }
+    document.getElementById("langBtn").innerText = lang === "zh" ? "切换英文" : "切换中文";
+    clearChat();
+}
+
 async function send() {
     const text = document.getElementById("input").value.trim();
     if (!text) return;
     addMsg("user", text);
     document.getElementById("input").value = "";
 
-    // 创建加载提示消息
+    // 创建加载提示
     const loadingDiv = document.createElement("div");
     loadingDiv.className = "message assistant loading-message";
     loadingDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
@@ -537,15 +702,14 @@ async function send() {
     chatBody.scrollTop = chatBody.scrollHeight;
 
     try {
-        // 使用流式接口
         const response = await fetch("/api/stroke_qa_stream", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ question: text })
         });
-
-        // 移除加载提示，并创建一个新的助手消息容器，用于逐步追加文字
         loadingDiv.remove();
+
+        // 创建助手消息容器
         const assistantMsgDiv = document.createElement("div");
         assistantMsgDiv.className = "message assistant";
         assistantMsgDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
@@ -553,18 +717,15 @@ async function send() {
         const bubble = assistantMsgDiv.querySelector(".msg-bubble");
         let fullText = "";
 
-        // 读取 SSE 流
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split("\n\n");
-            buffer = lines.pop(); // 保留未完成的部分
-
+            buffer = lines.pop();
             for (const line of lines) {
                 if (line.startsWith("data: ")) {
                     const jsonStr = line.slice(6);
@@ -575,16 +736,12 @@ async function send() {
                             bubble.innerHTML = fullText.replace(/\\n/g, '<br>');
                             chatBody.scrollTop = chatBody.scrollHeight;
                         } else if (data.done) {
-                            // 完成，可选后处理（如去除多余换行）
-                            // 最终文本已经完整显示
+                            // 完成，可以不做额外处理
                         }
-                    } catch (e) {
-                        console.error("解析 SSE 数据失败:", e);
-                    }
+                    } catch (e) { console.error(e); }
                 }
             }
         }
-        // 流结束后，如果开启了语音播报，朗读最终内容
         if (voiceEnabled && fullText) speak(fullText);
     } catch (err) {
         loadingDiv.remove();
@@ -594,7 +751,6 @@ async function send() {
 }
 
 function addMsg(role, text) {
-    // 传统一次性添加消息，用于用户消息和错误提示
     const body = document.getElementById("chatBody");
     const div = document.createElement("div");
     div.className = "message " + role;
@@ -615,7 +771,6 @@ function quickAsk(question) {
     send();
 }
 
-// 事件绑定（DOMContentLoaded 内）
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById("fontBtn").onclick = openFontModal;
     document.getElementById("confirmFontBtn").onclick = adjustFont;
@@ -637,6 +792,11 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById("scaleInput").onkeydown = function(e) {
         if (e.key === "Enter") adjustFont();
     };
+    const inputEl = document.getElementById("input");
+    if (inputEl) {
+        inputEl.removeAttribute("readonly");
+        inputEl.removeAttribute("disabled");
+    }
 });
 </script>
 </body>
