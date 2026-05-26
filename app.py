@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, request, jsonify, render_template_string, Response
+from flask import Flask, request, jsonify, render_template_string
 import re
 import os
-import json
-import time
 from dashscope import Application
 
 app = Flask(__name__)
@@ -16,79 +14,15 @@ DASHSCOPE_APP_ID = os.environ.get("DASHSCOPE_APP_ID")
 DASHSCOPE_WORKSPACE_ID = os.environ.get("DASHSCOPE_WORKSPACE_ID")
 
 if not DASHSCOPE_API_KEY:
-    print("警告：未设置环境变量 DASHSCOPE_API_KEY，RAG 应用将无法调用")
+    print("警告：未设置环境变量 DASHSCOPE_API_KEY")
 if not DASHSCOPE_APP_ID:
-    print("警告：未设置环境变量 DASHSCOPE_APP_ID，RAG 应用将无法调用")
+    print("警告：未设置环境变量 DASHSCOPE_APP_ID")
 
 # ============================================================
-# 流式生成器（带去重和长度限制）
-# ============================================================
-def generate_stream(question):
-    """生成流式响应，逐块返回答案片段"""
-    # 1. 非紧急症状过滤
-    mild_pattern = re.compile(
-        r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
-        re.IGNORECASE
-    )
-    if mild_pattern.search(question):
-        fixed_answer = ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
-                        "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-        # 将固定答案分块发送（模拟打字）
-        for i in range(0, len(fixed_answer), 20):
-            yield fixed_answer[i:i+20]
-            time.sleep(0.05)
-        return
-
-    # 2. 调用百炼 RAG 应用（流式输出）
-    try:
-        response = Application.call(
-            app_id=DASHSCOPE_APP_ID,
-            prompt=question,
-            api_key=DASHSCOPE_API_KEY,
-            workspace_id=DASHSCOPE_WORKSPACE_ID,
-            stream=True,
-            timeout=120
-        )
-    except Exception as e:
-        print(f"百炼应用调用失败: {e}")
-        yield "抱歉，系统繁忙，请稍后再试。"
-        return
-
-    # 3. 流式接收并实时发送（同时做去重和长度累积）
-    full_answer = ""
-    last_chunk = ""
-    buffer = ""
-    max_length = 2000
-
-    for chunk in response:
-        if chunk.output and chunk.output.text:
-            text = chunk.output.text
-            # 去重
-            if text == last_chunk:
-                continue
-            last_chunk = text
-            buffer += text
-            full_answer += text
-
-            if len(full_answer) > max_length:
-                remaining = max_length - (len(full_answer) - len(buffer))
-                if remaining > 0:
-                    yield buffer[:remaining]
-                yield "\n\n（回答过长已截断，如需完整信息请咨询医生）"
-                return
-
-            if len(buffer) > 30 or buffer.endswith(('。', '！', '？', '\n')):
-                yield buffer
-                buffer = ""
-
-    if buffer:
-        yield buffer
-
-# ============================================================
-# 非流式调用（保留，用于兼容）
+# 大模型调用函数（非流式，稳定版）
 # ============================================================
 def call_llm(question):
-    """非流式版本，一次性返回完整答案（保留原有去重和长度限制）"""
+    # 1. 非紧急症状过滤
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
@@ -97,25 +31,22 @@ def call_llm(question):
         return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
 
+    # 2. 调用百炼 RAG 应用（非流式）
     try:
         response = Application.call(
             app_id=DASHSCOPE_APP_ID,
             prompt=question,
             api_key=DASHSCOPE_API_KEY,
             workspace_id=DASHSCOPE_WORKSPACE_ID,
-            stream=True,
-            timeout=120
+            stream=False,
+            timeout=60
         )
-        full_answer = ""
-        for chunk in response:
-            if chunk.output and chunk.output.text:
-                full_answer += chunk.output.text
-        if not full_answer:
-            full_answer = "抱歉，未能获取到有效回答。"
+        full_answer = response.output.text if response and response.output else "抱歉，未能获取到有效回答。"
     except Exception as e:
         print(f"百炼应用调用失败: {e}")
         return "抱歉，系统繁忙，请稍后再试。"
 
+    # 3. 后处理：去重、限制长度、去除“您说得对”
     lines = full_answer.split('\n')
     unique_lines = []
     last_line = ""
@@ -125,10 +56,11 @@ def call_llm(question):
             last_line = line
     full_answer = '\n'.join(unique_lines)
     if len(full_answer) > 2000:
-        full_answer = full_answer[:2000] + "...\n\n（回答过长已截断，如需完整信息请咨询医生）"
+        full_answer = full_answer[:2000] + "...\n\n（回答过长已截断）"
     prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
     full_answer = prefix_pattern.sub('', full_answer).strip()
-    emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
+
+    emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院"]
     if full_answer and any(kw in full_answer for kw in emergency_keywords):
         if mild_pattern.search(question):
             return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
@@ -163,22 +95,6 @@ def stroke_qa():
     answer = call_llm(question)
     return jsonify({"status": "success", "data": {"answer": answer}})
 
-@app.route('/api/stroke_qa_stream', methods=['POST', 'OPTIONS'])
-def stroke_qa_stream():
-    if request.method == 'OPTIONS':
-        return '', 200
-    data = request.get_json(silent=True) or {}
-    question = data.get("question", "")
-    if not question:
-        return jsonify({"status": "error", "message": "问题不能为空"}), 400
-
-    def event_stream():
-        for text_chunk in generate_stream(question):
-            yield f"data: {json.dumps({'chunk': text_chunk})}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
-
-    return Response(event_stream(), mimetype="text/event-stream")
-
 @app.route('/')
 def index():
     return render_template_string('''
@@ -189,8 +105,14 @@ def index():
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
     <title>福医卒中通 · 脑卒中智能诊疗助手</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        :root { --font-scale: 1; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        :root {
+            --font-scale: 1;
+        }
         body {
             background: linear-gradient(135deg, #f0f7ff 0%, #e6f4fd 100%);
             padding: 20px;
@@ -198,10 +120,23 @@ def index():
             font-size: calc(16px * var(--font-scale));
             padding-bottom: 90px;
         }
-        .container { max-width: 1000px; margin: 0 auto; }
-        header { text-align: center; margin-bottom: 20px; }
-        header h1 { font-size: calc(56px * var(--font-scale)); color: #0077cc; margin-bottom: 6px; }
-        header p { color: #666; font-size: calc(28px * var(--font-scale)); }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        header h1 {
+            font-size: calc(56px * var(--font-scale));
+            color: #0077cc;
+            margin-bottom: 6px;
+        }
+        header p {
+            color: #666;
+            font-size: calc(28px * var(--font-scale));
+        }
         .main-card {
             background: #fff;
             border-radius: 16px;
@@ -220,8 +155,15 @@ def index():
             align-items: center;
             position: relative;
         }
-        .chat-header-bar h2 { font-size: calc(32px * var(--font-scale)); font-weight: 500; }
-        .header-btns { display: flex; gap: 8px; align-items: center; }
+        .chat-header-bar h2 {
+            font-size: calc(32px * var(--font-scale));
+            font-weight: 500;
+        }
+        .header-btns {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
         .header-btn {
             padding: 6px 12px;
             border-radius: 20px;
@@ -246,9 +188,21 @@ def index():
             display: none;
             min-width: 280px;
         }
-        .font-modal.show { display: block; }
-        .font-modal .modal-title { color: #0077cc; font-size: calc(24px * var(--font-scale)); margin-bottom: 10px; font-weight: 500; }
-        .font-modal .opt-group { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+        .font-modal.show {
+            display: block;
+        }
+        .font-modal .modal-title {
+            color: #0077cc;
+            font-size: calc(24px * var(--font-scale));
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+        .font-modal .opt-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
         .font-modal .opt-btn {
             flex: 1;
             padding: 8px 0;
@@ -259,8 +213,17 @@ def index():
             font-size: calc(22px * var(--font-scale));
             cursor: pointer;
         }
-        .font-modal .opt-btn.active { background: #0077cc; color: #fff; border-color: #0077cc; }
-        .font-modal .input-group { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+        .font-modal .opt-btn.active {
+            background: #0077cc;
+            color: #fff;
+            border-color: #0077cc;
+        }
+        .font-modal .input-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
         .font-modal input {
             flex: 1;
             padding: 8px 10px;
@@ -279,8 +242,17 @@ def index():
             font-size: calc(22px * var(--font-scale));
             cursor: pointer;
         }
-        .font-modal .tip-text { font-size: calc(20px * var(--font-scale)); color: #666; margin-top: 8px; text-align: center; }
-        .chat-content { display: flex; flex: 1; overflow: hidden; }
+        .font-modal .tip-text {
+            font-size: calc(20px * var(--font-scale));
+            color: #666;
+            margin-top: 8px;
+            text-align: center;
+        }
+        .chat-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
         .sidebar {
             width: 200px;
             background: #f8fcff;
@@ -300,12 +272,30 @@ def index():
             justify-content: center;
             animation: breathing 4s infinite ease-in-out;
         }
-        .avatar-box.patient { border-color: #5499c7; }
-        .avatar-card { text-align: center; margin-bottom: 24px; }
-        .avatar-card h3 { font-size: calc(28px * var(--font-scale)); color: #0077cc; }
-        .patient-text { color: #5499c7 !important; }
-        @keyframes breathing { 0%,100%{transform: scale(1);} 50%{transform: scale(1.04);} }
-        .chat-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .avatar-box.patient {
+            border-color: #5499c7;
+        }
+        .avatar-card {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .avatar-card h3 {
+            font-size: calc(28px * var(--font-scale));
+            color: #0077cc;
+        }
+        .patient-text {
+            color: #5499c7 !important;
+        }
+        @keyframes breathing {
+            0%,100%{transform: scale(1);}
+            50%{transform: scale(1.04);}
+        }
+        .chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
         .quick-questions {
             padding: 12px 16px;
             background: #f5f9fe;
@@ -331,10 +321,27 @@ def index():
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
-        .quick-questions button:hover { background: #0077cc; color: #fff; border-color: #0077cc; }
-        .chat-body { flex: 1; padding: 20px; overflow-y: auto; background: #fafbfc; }
-        .message { display: flex; gap: 10px; margin-bottom: 14px; max-width: 75%; }
-        .message.user { margin-left: auto; flex-direction: row-reverse; }
+        .quick-questions button:hover {
+            background: #0077cc;
+            color: #fff;
+            border-color: #0077cc;
+        }
+        .chat-body {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #fafbfc;
+        }
+        .message {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 14px;
+            max-width: 75%;
+        }
+        .message.user {
+            margin-left: auto;
+            flex-direction: row-reverse;
+        }
         .msg-avatar {
             width: 36px;
             height: 36px;
@@ -355,7 +362,11 @@ def index():
             font-size: calc(28px * var(--font-scale));
             word-break: break-word;
         }
-        .message.user .msg-bubble { background: #0077cc; color: #fff; border: none; }
+        .message.user .msg-bubble {
+            background: #0077cc;
+            color: #fff;
+            border: none;
+        }
         .chat-footer {
             position: fixed;
             bottom: 0;
@@ -392,7 +403,9 @@ def index():
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
-        .clear-btn { background: #777; }
+        .clear-btn {
+            background: #777;
+        }
         .mic-btn {
             width: 38px;
             height: 38px;
@@ -406,8 +419,15 @@ def index():
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
-        .mic-btn.recording { background: #e53935; animation: pulse 1s infinite; }
-        @keyframes pulse { 0%{transform: scale(1);} 50%{transform: scale(1.1);} 100%{transform: scale(1);} }
+        .mic-btn.recording {
+            background: #e53935;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%{transform: scale(1);}
+            50%{transform: scale(1.1);}
+            100%{transform: scale(1);}
+        }
         .modal-mask {
             position: fixed;
             top: 0;
@@ -418,7 +438,9 @@ def index():
             background: rgba(0,0,0,0.5);
             display: none;
         }
-        .modal-mask.show { display: block; }
+        .modal-mask.show {
+            display: block;
+        }
         @media (max-width: 768px) {
             .sidebar { display: none !important; }
             .chat-main { width: 100% !important; }
@@ -552,6 +574,7 @@ let isRecording = false;
 let activeRecognition = null;
 let mediaStream = null;
 
+// 完整头像 SVG（与页面中的小头像对应）
 const doctorAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <circle cx="22" cy="22" r="20" fill="#e6f7ff" stroke="#0077cc" stroke-width="1"/>
     <rect x="12" y="10" width="20" height="20" rx="3" fill="#f5d6c0" stroke="#333" stroke-width="1"/>
@@ -569,6 +592,7 @@ const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
 </svg>`;
 
+// 确保输入框可编辑
 var inputElement = document.getElementById("input");
 if (inputElement) {
     inputElement.removeAttribute("readonly");
@@ -623,6 +647,7 @@ function closeFontModal() {
     document.getElementById('scaleInput').value = '';
 }
 
+// ---------- 语音输入 ----------
 async function ensureMicrophonePermission() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -636,13 +661,7 @@ async function ensureMicrophonePermission() {
         return true;
     } catch (err) {
         console.error("麦克风授权失败:", err);
-        if (err.name === 'NotAllowedError') {
-            alert("无法获取麦克风权限。请点击地址栏左侧锁图标 → 网站设置 → 麦克风 → 选择“允许”，然后刷新页面。");
-        } else if (err.name === 'NotFoundError') {
-            alert("未检测到麦克风设备，请检查耳机或麦克风连接。");
-        } else {
-            alert("麦克风授权申请失败: " + err.message);
-        }
+        alert("无法获取麦克风权限。请点击地址栏左侧锁图标 → 网站设置 → 麦克风 → 选择“允许”，然后刷新页面。");
         return false;
     }
 }
@@ -669,9 +688,7 @@ function startRecognition() {
     };
     recognition.onerror = (event) => {
         console.error("语音识别错误:", event.error);
-        if (event.error === 'not-allowed') {
-            alert("麦克风权限不足，请刷新页面后重新授权。");
-        } else if (event.error !== 'aborted' && event.error !== 'no-speech') {
+        if (event.error !== 'aborted' && event.error !== 'no-speech') {
             alert(`语音识别出错: ${event.error}`);
         }
         stopRec();
@@ -714,6 +731,7 @@ window.addEventListener('beforeunload', function() {
     if (synth) synth.cancel();
 });
 
+// ---------- 语音播报 ----------
 function toggleVoice() {
     voiceEnabled = !voiceEnabled;
     document.getElementById("voiceBtn").innerText = "语音播报：" + (voiceEnabled ? "开" : "关");
@@ -742,19 +760,19 @@ function speak(text) {
     synth.speak(utterance);
 }
 
+// ---------- 中英文切换 ----------
 async function switchLang() {
     lang = lang === "zh" ? "en" : "zh";
-    try {
-        await fetch("/api/switch_lang", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lang })
-        });
-    } catch(e) { console.error("语言切换API调用失败", e); }
+    await fetch("/api/switch_lang", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang })
+    }).catch(e => console.error("语言切换API调用失败", e));
     document.getElementById("langBtn").innerText = lang === "zh" ? "切换英文" : "切换中文";
     clearChat();
 }
 
+// ---------- 发送消息 ----------
 async function send() {
     const text = document.getElementById("input").value.trim();
     if (!text) return;
@@ -769,44 +787,20 @@ async function send() {
     chatBody.scrollTop = chatBody.scrollHeight;
     
     try {
-        const response = await fetch("/api/stroke_qa_stream", {
+        const res = await fetch("/api/stroke_qa", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ question: text })
         });
-        loadingDiv.remove();
-        
-        const assistantMsgDiv = document.createElement("div");
-        assistantMsgDiv.className = "message assistant";
-        assistantMsgDiv.innerHTML = `<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
-        chatBody.appendChild(assistantMsgDiv);
-        const bubble = assistantMsgDiv.querySelector(".msg-bubble");
-        let fullText = "";
-        
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n\n");
-            buffer = lines.pop();
-            for (const line of lines) {
-                if (line.startsWith("data: ")) {
-                    const jsonStr = line.slice(6);
-                    try {
-                        const data = JSON.parse(jsonStr);
-                        if (data.chunk) {
-                            fullText += data.chunk;
-                            bubble.innerHTML = fullText.replace(/\\n/g, '<br>');
-                            chatBody.scrollTop = chatBody.scrollHeight;
-                        }
-                    } catch (e) { console.error(e); }
-                }
-            }
+        const data = await res.json();
+        if (data.status === "success") {
+            const ans = data.data.answer;
+            loadingDiv.remove();
+            addMsg("assistant", ans);
+            speak(ans);
+        } else {
+            throw new Error(data.message || "未知错误");
         }
-        if (voiceEnabled && fullText) speak(fullText);
     } catch (err) {
         loadingDiv.remove();
         addMsg("assistant", "抱歉，网络错误，请稍后再试。");
@@ -835,14 +829,18 @@ function quickAsk(question) {
     send();
 }
 
+// ---------- 事件绑定 ----------
 document.addEventListener('DOMContentLoaded', function() {
+    // 字体调节
     document.getElementById("fontBtn").onclick = openFontModal;
     document.getElementById("confirmFontBtn").onclick = adjustFont;
     document.getElementById("enlargeBtn").onclick = () => selectOpt('enlarge');
     document.getElementById("narrowBtn").onclick = () => selectOpt('narrow');
+    // 语言和语音
     document.getElementById("langBtn").onclick = switchLang;
     document.getElementById("voiceBtn").onclick = toggleVoice;
     document.getElementById("micBtn").onclick = toggleRec;
+    // 聊天
     document.getElementById("sendBtn").onclick = send;
     document.getElementById("clearBtn").onclick = clearChat;
     document.getElementById("input").onkeydown = function(e) {
@@ -851,11 +849,13 @@ document.addEventListener('DOMContentLoaded', function() {
             send();
         }
     };
+    // 弹窗
     document.getElementById("modalMask").onclick = closeFontModal;
     document.getElementById("fontModal").onclick = function(e) { e.stopPropagation(); };
     document.getElementById("scaleInput").onkeydown = function(e) {
         if (e.key === "Enter") adjustFont();
     };
+    // 确保输入框非只读
     const inputEl = document.getElementById("input");
     if (inputEl) {
         inputEl.removeAttribute("readonly");
