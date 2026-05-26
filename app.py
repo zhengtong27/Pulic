@@ -8,17 +8,23 @@ from dashscope import Application
 
 app = Flask(__name__)
 
-# 环境变量（在 Render 中设置）
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
 DASHSCOPE_APP_ID = os.environ.get("DASHSCOPE_APP_ID")
 DASHSCOPE_WORKSPACE_ID = os.environ.get("DASHSCOPE_WORKSPACE_ID")
 
+if not DASHSCOPE_API_KEY:
+    print("警告：未设置环境变量 DASHSCOPE_API_KEY")
+if not DASHSCOPE_APP_ID:
+    print("警告：未设置环境变量 DASHSCOPE_APP_ID")
+
 def generate_stream(question):
-    """流式生成回答片段"""
-    # 非紧急症状过滤
-    mild = re.compile(r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)', re.I)
+    mild = re.compile(
+        r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
+        re.IGNORECASE
+    )
     if mild.search(question):
-        fixed = "头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。"
+        fixed = ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
+                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
         for i in range(0, len(fixed), 15):
             yield fixed[i:i+15]
             time.sleep(0.03)
@@ -400,5 +406,7 @@ document.addEventListener('DOMContentLoaded',()=>{
 </script>
 </body>
 </html>
+''')
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5014, debug=False)
