@@ -19,7 +19,7 @@ else:
     client = None
     print("错误：无法创建 OpenAI 客户端，请设置环境变量 DASHSCOPE_API_KEY")
 
-MODEL_NAME = "qwen3-32b-27649d93fc36"   # 请根据实际情况修改
+MODEL_NAME = "qwen3-32b_eb56be00"   # 请根据实际情况修改
 
 @app.after_request
 def add_headers(response):
