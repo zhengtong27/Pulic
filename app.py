@@ -252,20 +252,25 @@ const patientAvatar = `<svg viewBox="0 0 44 44" width="26" height="26">
     <path d="M8 28 L12 26 L32 26 L36 28 L34 38 L10 38 Z" fill="#fff" stroke="#5499c7" stroke-width="1"/>
 </svg>`;
 
-var inputEl = document.getElementById("input");
-if(inputEl) { inputEl.removeAttribute("readonly"); inputEl.removeAttribute("disabled"); }
+if(document.getElementById("input")) document.getElementById("input").removeAttribute("readonly");
+if(document.getElementById("input")) document.getElementById("input").removeAttribute("disabled");
 
 function selectOpt(opt) {
     fontOpt = opt;
-    document.getElementById('enlargeBtn').className = opt==='enlarge'?'opt-btn active':'opt-btn';
-    document.getElementById('narrowBtn').className = opt==='narrow'?'opt-btn active':'opt-btn';
-    let si = document.getElementById('scaleInput');
-    if(opt==='enlarge'){ si.min=1; si.max=4; si.step=0.5; si.placeholder="1-4"; }
-    else{ si.min=0.3; si.max=1; si.step=0.1; si.placeholder="0.3-1"; }
-    si.value=""; si.focus();
+    let enlargeBtn = document.getElementById("enlargeBtn");
+    let narrowBtn = document.getElementById("narrowBtn");
+    if(enlargeBtn) enlargeBtn.className = opt==='enlarge'?'opt-btn active':'opt-btn';
+    if(narrowBtn) narrowBtn.className = opt==='narrow'?'opt-btn active':'opt-btn';
+    let si = document.getElementById("scaleInput");
+    if(si) {
+        if(opt==='enlarge'){ si.min=1; si.max=4; si.step=0.5; si.placeholder="1-4"; }
+        else{ si.min=0.3; si.max=1; si.step=0.1; si.placeholder="0.3-1"; }
+        si.value=""; si.focus();
+    }
 }
 function adjustFont() {
-    let si = document.getElementById('scaleInput');
+    let si = document.getElementById("scaleInput");
+    if(!si) return;
     let v = parseFloat(si.value.trim());
     if(isNaN(v)||v<=0) v=1;
     if(fontOpt==='enlarge') v=Math.min(4,Math.max(1,v));
@@ -274,8 +279,23 @@ function adjustFont() {
     si.value=v;
     closeFontModal();
 }
-function openFontModal(){ document.getElementById('fontModal').classList.add('show'); document.getElementById('modalMask').classList.add('show'); document.getElementById('scaleInput').focus(); }
-function closeFontModal(){ document.getElementById('fontModal').classList.remove('show'); document.getElementById('modalMask').classList.remove('show'); selectOpt('enlarge'); document.getElementById('scaleInput').value=''; }
+function openFontModal(){
+    let modal = document.getElementById("fontModal");
+    let mask = document.getElementById("modalMask");
+    if(modal) modal.classList.add('show');
+    if(mask) mask.classList.add('show');
+    let input = document.getElementById("scaleInput");
+    if(input) input.focus();
+}
+function closeFontModal(){
+    let modal = document.getElementById("fontModal");
+    let mask = document.getElementById("modalMask");
+    if(modal) modal.classList.remove('show');
+    if(mask) mask.classList.remove('show');
+    selectOpt('enlarge');
+    let input = document.getElementById("scaleInput");
+    if(input) input.value = '';
+}
 
 async function ensureMic() {
     if(!window.SpeechRecognition && !window.webkitSpeechRecognition){ alert("不支持语音识别"); return false; }
@@ -291,8 +311,8 @@ function startRecog(){
     rec.lang = lang==='zh'?'zh-CN':'en-US';
     rec.interimResults=false;
     rec.maxAlternatives=1;
-    rec.onstart=()=>{ isRecording=true; document.getElementById('micBtn').classList.add('recording'); };
-    rec.onresult=(e)=>{ document.getElementById('input').value=e.results[0][0].transcript; rec.stop(); };
+    rec.onstart=()=>{ isRecording=true; let btn = document.getElementById("micBtn"); if(btn) btn.classList.add('recording'); };
+    rec.onresult=(e)=>{ let input = document.getElementById("input"); if(input) input.value=e.results[0][0].transcript; rec.stop(); };
     rec.onerror=()=>stopRec();
     rec.onend=()=>stopRec();
     try{ rec.start(); activeRecognition=rec; }catch(e){ alert("启动失败"); stopRec(); }
@@ -305,26 +325,30 @@ function stopRec(){
     if(activeRecognition) activeRecognition.abort();
     activeRecognition=null;
     isRecording=false;
-    document.getElementById('micBtn').classList.remove('recording');
+    let btn = document.getElementById("micBtn");
+    if(btn) btn.classList.remove('recording');
 }
 window.addEventListener('beforeunload',()=>{ if(mediaStream) mediaStream.getTracks().forEach(t=>t.stop()); if(synth) synth.cancel(); });
 
 function toggleVoice(){
     voiceEnabled=!voiceEnabled;
-    document.getElementById('voiceBtn').innerText="语音播报："+(voiceEnabled?"开":"关");
-    if(!voiceEnabled) synth.cancel();
-    else{ let last=document.querySelector('.message.assistant .msg-bubble:last-child'); if(last) speak(last.innerText); }
+    let btn = document.getElementById("voiceBtn");
+    if(btn) btn.innerText="语音播报："+(voiceEnabled?"开":"关");
+    if(!voiceEnabled){ if(synth) synth.cancel(); }
+    else{ let last = document.querySelector('.message.assistant .msg-bubble:last-child'); if(last) speak(last.innerText); }
 }
-function getLastAssistantMessage(){ let m=document.querySelectorAll('.message.assistant .msg-bubble'); if(m.length) return m[m.length-1].innerText.trim(); return null; }
-function speak(t){ if(!voiceEnabled||!t) return; synth.cancel(); let u=new SpeechSynthesisUtterance(t); u.lang=lang==='zh'?'zh-CN':'en-US'; synth.speak(u); }
+function getLastAssistantMessage(){ let msgs = document.querySelectorAll('.message.assistant .msg-bubble'); if(msgs.length) return msgs[msgs.length-1].innerText.trim(); return null; }
+function speak(t){ if(!voiceEnabled||!t) return; if(synth) synth.cancel(); let u=new SpeechSynthesisUtterance(t); u.lang=lang==='zh'?'zh-CN':'en-US'; if(synth) synth.speak(u); }
 async function switchLang(){
     lang=lang==='zh'?'en':'zh';
     await fetch('/api/switch_lang',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lang})}).catch(e=>console.log);
-    document.getElementById('langBtn').innerText=lang==='zh'?'切换英文':'切换中文';
+    let btn = document.getElementById("langBtn");
+    if(btn) btn.innerText=lang==='zh'?'切换英文':'切换中文';
     clearChat();
 }
 function addMsg(role, text){
     let body=document.getElementById('chatBody');
+    if(!body) return;
     let div=document.createElement('div');
     div.className='message '+role;
     let avatar=role==='user'?patientAvatar:doctorAvatar;
@@ -334,26 +358,29 @@ function addMsg(role, text){
     body.scrollTop=body.scrollHeight;
 }
 function clearChat(){
-    document.getElementById('chatBody').innerHTML=`<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang==='zh'?'你好！我是脑卒中智能助手~':'Hello! I'm stroke assistant~'}</div></div>`;
+    let body=document.getElementById('chatBody');
+    if(body) body.innerHTML=`<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang==='zh'?'你好！我是脑卒中智能助手~':'Hello! I'm stroke assistant~'}</div></div>`;
 }
 async function send(){
-    let text=document.getElementById('input').value.trim();
+    let input = document.getElementById("input");
+    if(!input) return;
+    let text = input.value.trim();
     if(!text) return;
     addMsg('user',text);
-    document.getElementById('input').value='';
+    input.value='';
     let loading=document.createElement('div');
     loading.className='message assistant loading-message';
     loading.innerHTML=`<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">🤔 思考中...</div>`;
     let chatBody=document.getElementById('chatBody');
-    chatBody.appendChild(loading);
-    chatBody.scrollTop=chatBody.scrollHeight;
+    if(chatBody) chatBody.appendChild(loading);
+    if(chatBody) chatBody.scrollTop=chatBody.scrollHeight;
     try{
         let resp=await fetch('/api/stroke_qa_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:text})});
-        loading.remove();
+        if(loading) loading.remove();
         let assistantDiv=document.createElement('div');
         assistantDiv.className='message assistant';
         assistantDiv.innerHTML=`<div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble"></div>`;
-        chatBody.appendChild(assistantDiv);
+        if(chatBody) chatBody.appendChild(assistantDiv);
         let bubble=assistantDiv.querySelector('.msg-bubble');
         let full='';
         let reader=resp.body.getReader();
@@ -372,8 +399,8 @@ async function send(){
                         let data=JSON.parse(json);
                         if(data.chunk){
                             full+=data.chunk;
-                            bubble.innerHTML=full.replace(/\\n/g,'<br>');
-                            chatBody.scrollTop=chatBody.scrollHeight;
+                            if(bubble) bubble.innerHTML=full.replace(/\\n/g,'<br>');
+                            if(chatBody) chatBody.scrollTop=chatBody.scrollHeight;
                         }else if(data.done){}
                     }catch(e){}
                 }
@@ -381,27 +408,42 @@ async function send(){
         }
         if(voiceEnabled && full) speak(full);
     }catch(e){
-        loading.remove();
+        if(loading) loading.remove();
         addMsg('assistant','抱歉，网络错误，请稍后再试。');
         console.error(e);
     }
 }
-function quickAsk(q){ document.getElementById('input').value=q; send(); }
+function quickAsk(q){ let input=document.getElementById("input"); if(input) input.value=q; send(); }
 
 document.addEventListener('DOMContentLoaded',()=>{
-    document.getElementById('fontBtn').onclick=openFontModal;
-    document.getElementById('confirmFontBtn').onclick=adjustFont;
-    document.getElementById('enlargeBtn').onclick=()=>selectOpt('enlarge');
-    document.getElementById('narrowBtn').onclick=()=>selectOpt('narrow');
-    document.getElementById('langBtn').onclick=switchLang;
-    document.getElementById('voiceBtn').onclick=toggleVoice;
-    document.getElementById('micBtn').onclick=toggleRec;
-    document.getElementById('sendBtn').onclick=send;
-    document.getElementById('clearBtn').onclick=clearChat;
-    document.getElementById('input').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); send(); } };
-    document.getElementById('modalMask').onclick=closeFontModal;
-    document.getElementById('fontModal').onclick=e=>e.stopPropagation();
-    document.getElementById('scaleInput').onkeydown=e=>{ if(e.key==='Enter') adjustFont(); };
+    let fontBtn = document.getElementById("fontBtn");
+    if(fontBtn) fontBtn.onclick = openFontModal;
+    let confirmBtn = document.getElementById("confirmFontBtn");
+    if(confirmBtn) confirmBtn.onclick = adjustFont;
+    let enlargeBtn = document.getElementById("enlargeBtn");
+    if(enlargeBtn) enlargeBtn.onclick = ()=>selectOpt('enlarge');
+    let narrowBtn = document.getElementById("narrowBtn");
+    if(narrowBtn) narrowBtn.onclick = ()=>selectOpt('narrow');
+    let langBtn = document.getElementById("langBtn");
+    if(langBtn) langBtn.onclick = switchLang;
+    let voiceBtn = document.getElementById("voiceBtn");
+    if(voiceBtn) voiceBtn.onclick = toggleVoice;
+    let micBtn = document.getElementById("micBtn");
+    if(micBtn) micBtn.onclick = toggleRec;
+    let sendBtn = document.getElementById("sendBtn");
+    if(sendBtn) sendBtn.onclick = send;
+    let clearBtn = document.getElementById("clearBtn");
+    if(clearBtn) clearBtn.onclick = clearChat;
+    let input = document.getElementById("input");
+    if(input) input.onkeydown = e => { if(e.key==='Enter'){ e.preventDefault(); send(); } };
+    let modalMask = document.getElementById("modalMask");
+    if(modalMask) modalMask.onclick = closeFontModal;
+    let fontModal = document.getElementById("fontModal");
+    if(fontModal) fontModal.onclick = e => e.stopPropagation();
+    let scaleInput = document.getElementById("scaleInput");
+    if(scaleInput) scaleInput.onkeydown = e => { if(e.key==='Enter') adjustFont(); };
+    if(input) input.removeAttribute("readonly");
+    if(input) input.removeAttribute("disabled");
 });
 </script>
 </body>
