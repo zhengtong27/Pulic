@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify, render_template_string
 import re
 import os
 from openai import OpenAI
+from dashscope import Retrieval
 
 app = Flask(__name__)
 
@@ -37,11 +38,28 @@ def call_llm(question):
     if mild_pattern.search(question):
         return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                 "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
-    
+    context = ""
+    try:
+        resp = Retrieval.search(
+            model='text_embedding_v4',                # 使用的嵌入模型
+            index_name='ssy8053dlh',               
+            question=question,
+            top_k=3,                                
+        )
+        if resp and hasattr(resp, 'documents') and resp.documents:
+            docs = [doc.content for doc in resp.documents]
+            context = "\n\n".join(docs)
+            print(f"[RAG] 召回 {len(docs)} 个文档片段")
+    except Exception as e:
+        print(f"[RAG] 检索失败: {e}")
     system_prompt = (
         "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
         "【回答风格】\n"
         "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁，直接给出建议或信息。\n\n"
+    )
+    if context:
+        system_prompt += f"【参考资料】\n{context}\n\n请优先使用上述参考资料回答用户问题。如果资料中没有相关信息，则根据自己的知识回答。\n\n"
+    system_prompt += (
         "【重要限制】\n"
         "1. 对于以下症状，绝对不要提及“脑卒中”、“中风”、“紧急就医”、“拨打120”等词汇，只需给予休息观察建议：\n"
         "   - 轻微头痛、头晕、眼花、疲劳、乏力、颈部不适、失眠、焦虑、消化不良等\n"
@@ -71,10 +89,8 @@ def call_llm(question):
             max_tokens=1024,
             stream=True
         )
-        
         full_answer = ""
         reasoning_parts = []
-        
         for chunk in stream:
             if chunk.choices and len(chunk.choices) > 0:
                 delta = chunk.choices[0].delta
@@ -82,23 +98,20 @@ def call_llm(question):
                     reasoning_parts.append(delta.reasoning_content)
                 if hasattr(delta, "content") and delta.content:
                     full_answer += delta.content
-        
         if reasoning_parts:
             print(f"[思考过程] {''.join(reasoning_parts)}")
         
+        # 去除“您说得对”等开头
         prefix_pattern = re.compile(r'^(您说得对|好的|是的|没错|嗯|对，|对的，|好的，)\s*', re.IGNORECASE)
-        cleaned_answer = prefix_pattern.sub('', full_answer).strip()
-        if cleaned_answer:
-            full_answer = cleaned_answer
-        
+        full_answer = prefix_pattern.sub('', full_answer).strip()
+        # 安全兜底：如果模型误触发了紧急词，且问题属于非紧急，则覆盖回答
         emergency_keywords = ["脑卒中", "中风", "拨打120", "紧急就医", "立即前往医院", "专业医生进行评估"]
         if full_answer and any(kw in full_answer for kw in emergency_keywords):
             if mild_pattern.search(question):
                 return ("头痛的原因很多，比如疲劳、紧张或血压波动。请先坐下休息，喝点温水，观察一下。"
                         "如果疼痛持续不缓解或加重，再咨询医生。注意：本内容仅供参考，如有需要请及时就医。")
         
-        return full_answer.strip() if full_answer else "抱歉，模型未返回有效回答。"
-    
+        return full_answer if full_answer else "抱歉，模型未返回有效回答。"
     except Exception as e:
         print(f"模型调用失败: {e}")
         return "抱歉，系统繁忙，请稍后再试。"
