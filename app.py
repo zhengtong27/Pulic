@@ -17,7 +17,7 @@ if DASHSCOPE_API_KEY:
 else:
     client = None
 
-MODEL_NAME = "qwen-max"   # 可改为 qwen-plus 或 qwen-turbo
+MODEL_NAME = "qwen3-32b-351ed038aecc"   # 可改为 qwen-plus 或 qwen-turbo
 
 @app.after_request
 def add_headers(response):
