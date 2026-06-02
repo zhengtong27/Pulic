@@ -30,7 +30,7 @@ def add_headers(response):
     return response
 
 def generate_stream(question):
-    # 非紧急症状过滤（固定回答也逐字输出）
+    # 非紧急症状过滤（直接返回固定回答）
     mild_pattern = re.compile(
         r'(头(?:有?点)?痛|头(?:有?点)?晕|眼花|疲劳|乏力|失眠|焦虑|消化不良|颈部不适|有点不舒服)',
         re.IGNORECASE
@@ -46,7 +46,7 @@ def generate_stream(question):
     system_prompt = (
         "你是一个脑卒中健康科普助手，专为老年人及家属提供温和、可信的健康知识。\n\n"
         "【回答风格】\n"
-        "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁，直接给出建议或信息。\n\n"
+        "直接回答用户的问题，不要以“您说得对”、“好的”、“是的”等肯定性词语开头。保持语气温和、简洁。\n\n"
         "【重要限制】\n"
         "1. 对于以下症状，绝对不要提及“脑卒中”、“中风”、“紧急就医”、“拨打120”等词汇，只需给予休息观察建议：\n"
         "   - 轻微头痛、头晕、眼花、疲劳、乏力、颈部不适、失眠、焦虑、消化不良等\n"
@@ -58,11 +58,10 @@ def generate_stream(question):
         "   - 突发剧烈头痛（“像被雷劈一样”）\n"
         "   - 单侧视力突然模糊或失明\n"
         "   - 突然行走不稳、失去平衡\n\n"
-        "3. 对于所有其他健康问题，回答应通俗易懂，引用权威知识，但始终强调“本内容仅供参考，如有不适请及时就医”。\n\n"
+        "3. 对于所有其他健康问题，回答应通俗易懂，始终强调“本内容仅供参考，如有不适请及时就医”。\n\n"
         "4. 绝不提供急救指导、药物剂量或替代医生诊断的建议。\n\n"
-        "5. 如果用户描述的症状不在上述列表中，请先询问是否有其他症状，并建议先休息观察，切勿自行套用脑卒中标准。\n\n"
         "【来源要求】\n"
-        "在回答末尾，请附上主要参考来源，格式如“（来源：《中国脑卒中防治指南2023》）”。如果使用了多个来源，可以列出。"
+        "在回答末尾附上主要参考来源，例如（来源：《中国脑卒中防治指南2023》）。"
     )
 
     try:
@@ -72,35 +71,35 @@ def generate_stream(question):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": question}
             ],
-            extra_body={"enable_thinking": True},
             temperature=0.3,
             top_p=0.85,
             max_tokens=1024,
             stream=True
         )
     except Exception as e:
-        print(f"API调用失败: {e}")
-        err_msg = "抱歉，系统繁忙，请稍后再试。"
-        for ch in err_msg:
+        print(e)
+        err = "抱歉，系统繁忙，请稍后再试。"
+        for ch in err:
             yield ch
             time.sleep(0.03)
         return
 
-    full_answer = ""
+    full = ""
     for chunk in stream:
         if chunk.choices and len(chunk.choices) > 0:
             delta = chunk.choices[0].delta
             if hasattr(delta, "content") and delta.content:
                 txt = delta.content
-                full_answer += txt
-                # 逐字符发送
+                full += txt
+                # 逐字符发送，并实时移除 ** 符号
                 for ch in txt:
-                    yield ch
-                    time.sleep(0.02)  # 调整此值改变打字速度
-
-    # 如果模型没有自带来源，且回答中不含“来源”，则手动补充（可选）
-    if "来源" not in full_answer and "参考" not in full_answer:
-        source = "\n\n（来源：《中国脑卒中防治指南2023》及相关专家共识）"
+                    if ch != '*' or (ch == '*' and len(full) > 1 and full[-2] != '*'):  # 简单过滤单个*，实际更好的方法是后处理
+                        yield ch
+                    time.sleep(0.02)
+    # 最终确认回答中若有**则再清理一遍（但流式已经逐个字符输出，不会出现**）
+    # 后处理添加来源（如果模型未提供）
+    if "来源" not in full and "参考" not in full:
+        source = "\n\n（来源：《中国脑卒中防治指南2023》）"
         for ch in source:
             yield ch
             time.sleep(0.02)
@@ -117,10 +116,8 @@ def stream():
         yield "data: {\"done\": true}\n\n"
     return Response(gen(), mimetype="text/event-stream")
 
-@app.route('/api/switch_lang', methods=['POST', 'OPTIONS'])
+@app.route('/api/switch_lang', methods=['POST'])
 def switch_lang():
-    if request.method == 'OPTIONS':
-        return '', 200
     return jsonify({"status": "success"})
 
 @app.route('/')
