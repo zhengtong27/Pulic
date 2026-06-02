@@ -142,12 +142,15 @@ async function switchLang(){
     let btn=getEl('langBtn'); if(btn) btn.innerText=lang==='zh'?"切换英文":"切换中文"; clearChat();
 }
 function addMsg(role, text){
-    let body=getEl('chatBody'); if(!body) return;
-    let div=document.createElement('div'); div.className='message '+role;
-    let avatar=role==='user'?patientAvatar:doctorAvatar;
-    let cleaned=text.replace(/\*\*/g, '');
+    let body = getEl('chatBody');
+    if (!body) return;
+    let div = document.createElement('div');
+    div.className = 'message ' + role;
+    let avatar = role === 'user' ? patientAvatar : doctorAvatar;
+    let cleaned = text.split('**').join('');
     div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleaned.replace(/\n/g, '<br>')}</div>`;
-    body.appendChild(div); body.scrollTop=body.scrollHeight;
+    body.appendChild(div);
+    body.scrollTop = body.scrollHeight;
 }
 function clearChat(){ let body=getEl('chatBody'); if(body) body.innerHTML=`<div class="message"><div class="msg-avatar">${doctorAvatar}</div><div class="msg-bubble">${lang==='zh'?'你好！我是脑卒中智能助手~':'Hello! I\'m stroke assistant~'}</div></div>`; }
 async function send(){
@@ -174,6 +177,9 @@ async function send(){
                         const data = JSON.parse(jsonStr);
                         if (data.chunk !== undefined) {
                             full += data.chunk;
+                            let chunkText = data.chunk;
+                            chunkText = chunkText.split('**').join('');
+                            full += chunkText;
                             bubble.innerHTML = full.replace(/\n/g, '<br>');
                             if(chatBody) chatBody.scrollTop = chatBody.scrollHeight;
                         }
