@@ -145,8 +145,7 @@ function addMsg(role, text){
     let body=getEl('chatBody'); if(!body) return;
     let div=document.createElement('div'); div.className='message '+role;
     let avatar=role==='user'?patientAvatar:doctorAvatar;
-    // 移除所有 * 号（包括 ** 和单个 *）
-    let cleaned = text.replace(/\*/g, '');
+    let cleaned=text.replace(/\*\*/g, '');
     div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${cleaned.replace(/\n/g, '<br>')}</div>`;
     body.appendChild(div); body.scrollTop=body.scrollHeight;
 }
@@ -175,9 +174,7 @@ async function send(){
                         const data = JSON.parse(jsonStr);
                         if (data.chunk !== undefined) {
                             full += data.chunk;
-                            // 实时显示时也移除 * 号
-                            let displayText = full.replace(/\*/g, '');
-                            bubble.innerHTML = displayText.replace(/\n/g, '<br>');
+                            bubble.innerHTML = full.replace(/\n/g, '<br>');
                             if(chatBody) chatBody.scrollTop = chatBody.scrollHeight;
                         }
                     } catch(e) { console.error(e); }
